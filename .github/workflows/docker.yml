@@ -44,6 +44,19 @@ jobs:
           docker run -d --name pb -p 8000:8000 printbridge:test
           ./scripts/smoke_test.sh http://localhost:8000 tests/fixtures/two-blocks.3mf || { docker logs pb; exit 1; }
 
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Browser tests (Chromium driving the image, with a mock printer)
+        run: |
+          docker run -d --name pb-e2e --network host \
+            -e PRINTBRIDGE_PORT=8746 -e PRINTBRIDGE_PRINTER_KIND=octoprint \
+            -e PRINTBRIDGE_PRINTER_URL=http://127.0.0.1:8766 -e PRINTBRIDGE_PRINTER_API_KEY=e2e-key \
+            printbridge:test
+          uv sync --frozen
+          uv run --with playwright playwright install --with-deps chromium
+          PRINTBRIDGE_E2E=1 PRINTBRIDGE_E2E_URL=http://127.0.0.1:8746 \
+            uv run --with playwright pytest tests/e2e -v || { docker logs pb-e2e | tail -100; exit 1; }
+
       - uses: docker/metadata-action@v5
         id: meta
         with:
