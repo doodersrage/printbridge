@@ -22,8 +22,8 @@ SLICER_CANDIDATES = (
 
 
 class PrinterConfig(BaseModel):
-    kind: Literal["octoprint", "moonraker"] = "octoprint"
-    url: str = Field("", description="Base URL of the print host, e.g. http://octopi.local")
+    kind: Literal["creality_box", "octoprint", "moonraker"] = "creality_box"
+    url: str = Field("", description="Address of the print host, e.g. 192.168.1.50 or http://octopi.local")
     api_key: str = ""
     verify_tls: bool = True
 
@@ -53,7 +53,7 @@ def load_settings() -> Settings:
         url = os.environ.get("PRINTBRIDGE_PRINTER_URL")
         if url:
             settings.printer.url = url
-            settings.printer.kind = os.environ.get("PRINTBRIDGE_PRINTER_KIND", "octoprint")  # type: ignore[assignment]
+            settings.printer.kind = os.environ.get("PRINTBRIDGE_PRINTER_KIND", "creality_box")  # type: ignore[assignment]
             settings.printer.api_key = os.environ.get("PRINTBRIDGE_PRINTER_API_KEY", "")
     if not settings.slicer_path:
         settings.slicer_path = detect_slicer()

@@ -92,16 +92,18 @@
       <h2>Settings</h2>
       <fieldset>
         <legend>Print host</legend>
-        <p class="muted small">The Ender-3 V3 SE has no network port of its own. Connect it by USB to a host running OctoPrint or Klipper (Moonraker) and point PrintBridge at that host.</p>
+        <p class="muted small">The Ender-3 V3 SE has no network port of its own. It is reached through whatever is plugged into its USB port.</p>
         <label>Type
-          <select name="kind">
+          <select name="kind" id="host-kind">
+            <option value="creality_box">Creality Wi-Fi Box 2.0</option>
             <option value="octoprint">OctoPrint</option>
             <option value="moonraker">Moonraker (Klipper)</option>
           </select>
         </label>
-        <label>URL<input name="url" type="url" placeholder="http://octopi.local"></label>
-        <label>API key<input name="api_key" type="password" autocomplete="off" placeholder="Required for OctoPrint"></label>
-        <label class="check"><input type="checkbox" name="verify_tls" checked> Verify TLS certificates</label>
+        <label>Address<input name="url" id="host-url" placeholder="192.168.1.50"></label>
+        <p class="muted small" id="box-hint">Use the box's IP address (shown in the Creality Cloud app under the device's details). Give it a fixed IP in your router so it doesn't change. A microSD card must be in the box.</p>
+        <label class="http-only">API key<input name="api_key" type="password" autocomplete="off" placeholder="Required for OctoPrint"></label>
+        <label class="check http-only"><input type="checkbox" name="verify_tls" checked> Verify TLS certificates</label>
       </fieldset>
       <fieldset>
         <legend>Slicer</legend>

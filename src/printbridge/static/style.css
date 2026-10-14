@@ -151,3 +151,4 @@ dialog::backdrop { background: rgb(0 0 0 / 0.45); }
 fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0.9rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
 legend { padding: 0 0.3rem; font-size: 0.85rem; color: var(--muted); }
 fieldset p { margin: 0; }
+[hidden] { display: none !important; }

@@ -7,16 +7,26 @@ the print right away or just upload it.
 
 ## How it connects to the printer
 
-The Ender-3 V3 SE has no Wi-Fi or Ethernet of its own. To get it on the network,
-plug it into a small computer over USB and run one of these on that computer:
+The Ender-3 V3 SE has no Wi-Fi or Ethernet of its own. PrintBridge talks to
+whatever is plugged into its USB port:
 
-| Host | Typical setup | What PrintBridge uses |
-| --- | --- | --- |
-| **OctoPrint** | Raspberry Pi + OctoPi, stock Creality firmware | REST API with an API key (OctoPrint → Settings → Application Keys) |
-| **Moonraker** | Klipper firmware + Mainsail/Fluidd | Moonraker HTTP API; the API key is optional |
+| Host | What PrintBridge uses |
+| --- | --- |
+| **Creality Wi-Fi Box 2.0** (default) | The box's local API on port 81 for status and control, and anonymous FTP to upload onto the box's microSD card. This is the same protocol Creality's own CrealityPrint slicer uses over LAN. |
+| **OctoPrint** | REST API with an API key (OctoPrint → Settings → Application Keys) |
+| **Moonraker** (Klipper) | Moonraker HTTP API; the API key is optional |
 
 PrintBridge uploads the G-code to that host and can start, pause, resume or
 cancel the print. It also shows nozzle and bed temperatures and print progress.
+
+### Creality Wi-Fi Box 2.0 notes
+
+- Enter the box's **IP address** in Settings, for example `192.168.1.50`. Give
+  it a DHCP reservation in your router so the address doesn't change.
+- The box needs a **microSD card** inserted. Uploaded files are stored there.
+- The box must be on the same LAN as the PrintBridge server and reachable on
+  TCP **81** (HTTP) and **21** (FTP, passive mode).
+- Creality has never published this API, so a future box firmware update could change it.
 
 ## Run with Docker (Debian 13)
 
@@ -26,7 +36,7 @@ cd printbridge
 docker compose up -d --build
 ```
 
-Then open `http://<server>:8000` and set the print host under **Settings**.
+Then open `http://<server>:8000` and enter your Wi-Fi Box's IP under **Settings**.
 Settings and jobs are kept in `./data`.
 
 The image is built on `debian:trixie-slim` and installs PrusaSlicer from the
@@ -34,9 +44,9 @@ Debian archive. You can also set the first-run defaults with environment
 variables (for example in a `.env` file next to `docker-compose.yml`):
 
 ```env
-PRINTBRIDGE_PRINTER_KIND=octoprint      # or moonraker
-PRINTBRIDGE_PRINTER_URL=http://octopi.local
-PRINTBRIDGE_PRINTER_API_KEY=your-key
+PRINTBRIDGE_PRINTER_KIND=creality_box   # or octoprint / moonraker
+PRINTBRIDGE_PRINTER_URL=192.168.1.50
+PRINTBRIDGE_PRINTER_API_KEY=            # OctoPrint only
 ```
 
 These only apply until the settings are first saved in the UI.

@@ -229,9 +229,18 @@ $("#open-settings").addEventListener("click", async () => {
   sform.slicer_path.value = s.slicer_path;
   sform.slice_timeout.value = s.slice_timeout;
   $("#settings-err").textContent = "";
+  syncHostFields();
   dlg.showModal();
 });
 $("#settings-cancel").addEventListener("click", () => dlg.close());
+
+function syncHostFields() {
+  const box = sform.kind.value === "creality_box";
+  $("#box-hint").hidden = !box;
+  sform.querySelectorAll(".http-only").forEach((el) => { el.hidden = box; });
+  $("#host-url").placeholder = { creality_box: "192.168.1.50", octoprint: "http://octopi.local", moonraker: "http://mainsail.local" }[sform.kind.value];
+}
+$("#host-kind").addEventListener("change", syncHostFields);
 
 sform.addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -10,6 +10,6 @@ services:
       - ./data:/data
     environment:
       # Optional first-run defaults; can be changed later in the web UI (Settings).
-      PRINTBRIDGE_PRINTER_KIND: ${PRINTBRIDGE_PRINTER_KIND:-octoprint}
+      PRINTBRIDGE_PRINTER_KIND: ${PRINTBRIDGE_PRINTER_KIND:-creality_box}
       PRINTBRIDGE_PRINTER_URL: ${PRINTBRIDGE_PRINTER_URL:-}
       PRINTBRIDGE_PRINTER_API_KEY: ${PRINTBRIDGE_PRINTER_API_KEY:-}
