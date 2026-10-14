@@ -36,6 +36,21 @@ class Mesh:
         return min(xs), min(ys), max(xs), max(ys), min(zs)
 
 
+def stl_size(path: Path) -> list[float]:
+    """Bounding-box size (W, D, H) of a binary STL without building a mesh."""
+    data = path.read_bytes()
+    count = struct.unpack_from("<I", data, 80)[0] if len(data) >= 84 else 0
+    if not count or len(data) != 84 + count * 50:
+        raise CombineError("expected a binary STL")
+    lo, hi = [float("inf")] * 3, [float("-inf")] * 3
+    for rec in struct.iter_unpack("<12fH", data[84:]):
+        for k in range(3):
+            a, b, c = rec[3 + k], rec[6 + k], rec[9 + k]
+            lo[k] = min(lo[k], a, b, c)
+            hi[k] = max(hi[k], a, b, c)
+    return [round(hi[k] - lo[k], 2) for k in range(3)]
+
+
 def read_stl(path: Path, name: str) -> Mesh:
     data = path.read_bytes()
     count = struct.unpack_from("<I", data, 80)[0] if len(data) >= 84 else 0

@@ -100,6 +100,24 @@ matches this printer. **Multi-plate 3MFs** from Bambu Studio and OrcaSlicer get
 a plate picker on the job. Plate 1 is sliced by default, and choosing another
 plate re-slices that plate only. If you upload `.gcode`, slicing is skipped.
 
+### Files made for another printer
+
+Model sites often offer a separate 3MF per printer, and those files can be
+scaled or rearranged for that printer's bed. When you upload a 3MF,
+PrintBridge reads what it was set up for and warns you on the job when:
+
+- it was made for another printer or bed size, for example *Bambu Lab A1 mini (180 × 180 mm bed)*
+- it stores a **scale factor**, for example *scales the model to 80%*. Click **Use original size** to print at the model's real size.
+- it uses inches or other non-millimetre units. These are converted automatically.
+
+Every job shows its printed size (📐 W × D × H mm). To change it, open
+**3D view → Model** and type the width, depth or height you want. The other
+two follow proportionally. Then click **Resize & re-slice**.
+
+A file whose geometry itself was drawn at the wrong size can't be detected.
+Resize it to a dimension you know, such as the width of the board a case is
+for.
+
 ### Editing profiles
 
 Click **Profiles** to edit the machine, quality and material profiles in the

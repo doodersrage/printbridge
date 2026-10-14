@@ -266,6 +266,7 @@ let jobsSnapshot = "";
 
 function jobMeta(job) {
   const parts = [new Date(job.created * 1000).toLocaleString()];
+  if (job.size) parts.push(`📐 ${job.size.map((v) => v.toFixed(1)).join(" × ")} mm`);
   const o = job.options;
   if (o) {
     let s = `${profilesInfo?.qualities[o.quality]?.split(" —")[0] ?? o.quality} · ${profilesInfo?.materials[o.material]?.split(" —")[0] ?? o.material} · ${o.infill}% infill`;
@@ -323,6 +324,21 @@ function renderJobs(jobs) {
     pill.classList.add(STATE_CLASS[job.state] || "x");
     $(".job-meta", li).textContent = jobMeta(job);
     $(".job-error", li).textContent = job.error || "";
+
+    const info = job.source_info;
+    if (info?.warnings?.length && job.options) {
+      const warn = $(".job-warn", li);
+      warn.hidden = false;
+      const usingOriginal = job.options.original_size && info.scale;
+      $(".warn-text", warn).textContent = usingOriginal
+        ? `${info.warnings.filter((w) => !w.startsWith("This file scales")).join(" ")} Printing at the model's original size (the file's ${Math.round(info.scale * 100)}% scale is ignored).`.trim()
+        : `⚠ ${info.warnings.join(" ")}`;
+      const btn = $('[data-act="orig-size"]', warn);
+      if (info.scale && IDLE.includes(job.state)) {
+        btn.hidden = false;
+        btn.textContent = usingOriginal ? `Use the file's ${Math.round(info.scale * 100)}%` : "Use original size";
+      }
+    }
 
     const sel = $(".job-select", li);
     const combinable = !!job.options && IDLE.includes(job.state) && !job.calibration;
@@ -424,6 +440,7 @@ async function drainThumbnails() {
   else refreshJobs();
 }
 window.addEventListener("printbridge-viewer-ready", () => queueThumbnails(jobsCache));
+window.addEventListener("printbridge-jobs-changed", () => { jobsSnapshot = ""; refreshJobs(); });
 
 $("#combine-btn").addEventListener("click", async () => {
   const ids = [...selected];
@@ -466,6 +483,14 @@ $("#jobs").addEventListener("click", async (ev) => {
   const act = btn.dataset.act;
   if (act === "view") {
     window.PrintBridgeViewer?.open(job, job.options ? "model" : "toolpaths");
+    return;
+  }
+  if (act === "orig-size") {
+    try {
+      await api(`/api/jobs/${id}/reslice`, { method: "POST", json: { ...job.options, original_size: !job.options.original_size } });
+    } catch (e) { alert(e.message); }
+    jobsSnapshot = "";
+    refreshJobs();
     return;
   }
   if (act === "cal-save") {

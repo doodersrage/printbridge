@@ -19,6 +19,8 @@ releases may include breaking changes.
 - **Webcam** relay (any MJPEG or snapshot URL).
 - **Backup and restore** of settings, presets, profiles and history.
 - Web app manifest and icons for adding PrintBridge to a phone's home screen.
+- **Detection of 3MFs made for another printer**: shows the target printer and bed, any scale factor and the units stored in the file, with **Use original size** to undo a stored scale.
+- **Resize by dimensions** in the 3D view, and the printed size (W × D × H) on every job.
 
 ## [0.1.0] - 2026-10-14
 

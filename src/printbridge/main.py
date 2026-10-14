@@ -24,7 +24,7 @@ from .monitor import ACTIVE, Monitor
 from .mqtt import MqttBridge
 from .printers import PrinterError, PrinterStatus, RemoteFile, make_host
 from .slicer import SliceOptions, SlicerError, check_options, export_preview, slice_model
-from .threemf import ThreeMFError, extract_plate, read_plates
+from .threemf import ThreeMFError, extract_plate, inspect, read_plates, remove_stored_scale
 
 ACCEPTED = {".3mf", ".stl", ".obj", ".gcode", ".zip"}
 MAX_THUMBNAIL = 1024 * 1024
@@ -184,18 +184,36 @@ def validate_options(opts: SliceOptions) -> None:
 
 
 def model_input(job: Job) -> Path:
-    """The model file to slice: the upload, or just the chosen plate of a multi-plate 3MF."""
+    """The model file to slice: the upload, just the chosen plate of a multi-plate 3MF,
+    and/or a copy without the scale stored in the file."""
     src = state.jobs.source_path(job)
     plate = job.options.plate if job.options else None
-    if not job.plates or plate is None:
-        return src
-    dst = state.jobs.plate_path(job, plate)
-    if not dst.exists():
-        try:
-            extract_plate(src, dst, plate)
-        except (ThreeMFError, KeyError, OSError) as e:
-            raise SlicerError(f"Could not extract plate {plate}: {e}") from e
-    return dst
+    if job.plates and plate is not None:
+        dst = state.jobs.plate_path(job, plate)
+        if not dst.exists():
+            try:
+                extract_plate(src, dst, plate)
+            except (ThreeMFError, KeyError, OSError) as e:
+                raise SlicerError(f"Could not extract plate {plate}: {e}") from e
+        src = dst
+    if job.options and job.options.original_size and job.source_info and job.source_info.scale:
+        dst = state.jobs.dir(job) / f"unscaled-{plate or 0}.3mf"
+        if not dst.exists():
+            try:
+                remove_stored_scale(src, dst)
+            except (OSError, ValueError, KeyError) as e:
+                raise SlicerError(f"Could not remove the stored scale: {e}") from e
+        src = dst
+    return src
+
+
+async def measure(job: Job) -> list[float] | None:
+    """Printed size (W, D, H) from the placed model, cached as the 3D preview."""
+    path = state.jobs.preview_path(job)
+    async with state.preview_lock:
+        if not path.exists():
+            await export_preview(state.settings.slicer_path, model_input(job), path, job.options or SliceOptions())
+    return await asyncio.to_thread(combine.stl_size, path)
 
 
 def clear_derived(job: Job) -> None:
@@ -242,9 +260,11 @@ def _finish_job(job: Job, ext: str, opts: SliceOptions) -> Job:
     if ext == ".gcode":
         dest.rename(state.jobs.gcode_path(job))
         return state.jobs.update(job, source=job.gcode_name, state="ready", stats=parse_stats(state.jobs.gcode_path(job)))
-    if ext == ".3mf" and (plates := read_plates(dest)):
-        plate = opts.plate if opts.plate in {p.id for p in plates} else plates[0].id
-        state.jobs.update(job, plates=plates, options=opts.model_copy(update={"plate": plate}))
+    if ext == ".3mf":
+        state.jobs.update(job, source_info=inspect(dest))
+        if plates := read_plates(dest):
+            plate = opts.plate if opts.plate in {p.id for p in plates} else plates[0].id
+            state.jobs.update(job, plates=plates, options=opts.model_copy(update={"plate": plate}))
     spawn(run_slice(job))
     return job
 
@@ -265,7 +285,11 @@ async def run_slice(job: Job) -> None:
             )
             if job.calibration:
                 calibration.post_process(out, job.calibration)
-            jobs.update(job, state="ready", stats=parse_stats(out))
+            try:
+                size = await measure(job)
+            except (SlicerError, combine.CombineError, OSError):
+                size = None  # the size is informational; never fail a good slice over it
+            jobs.update(job, state="ready", stats=parse_stats(out), size=size)
         except (SlicerError, profiles.ProfileError) as e:
             jobs.update(job, state="failed", error=str(e))
         except Exception as e:  # keep the job record consistent on unexpected errors

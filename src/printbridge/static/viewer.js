@@ -48,6 +48,7 @@ const layerBar = $("layer-bar");
 const layerRange = $("layer-range");
 const layerOut = $("layer-out");
 const layerOnly = $("layer-only");
+const resizeBar = $("resize-bar");
 
 let renderer, scene, camera, controls, bedGroup, frameId;
 let job = null;
@@ -299,6 +300,7 @@ async function show(next) {
   for (const [key, v] of Object.entries(views)) if (v?.object) v.object.visible = key === mode;
   document.querySelectorAll("#viewer .tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
   layerBar.hidden = mode !== "toolpaths";
+  resizeBar.hidden = true;
   legendEl.hidden = true;
 
   let v = views[mode];
@@ -319,6 +321,7 @@ async function show(next) {
   }
   setStatus("");
   setInfo(v.info, v.error);
+  if (mode === "model") setupResize(v);
   if (mode === "toolpaths") {
     layerRange.max = String(v.layers.length);
     if (!v.touched) {
@@ -363,6 +366,50 @@ document.querySelectorAll("#viewer .tabs button").forEach((b) => b.addEventListe
 $("viewer-close").addEventListener("click", () => dlg.close());
 $("viewer-fit").addEventListener("click", fit);
 $("viewer-bed").addEventListener("click", () => frame(bedBox()));
+
+/* ---- resize by dimensions ---- */
+
+let resizeBase = null; // current printed size, and the job's current scale %
+
+function setupResize(v) {
+  const IDLE = ["ready", "failed", "sent", "printed", "stopped"];
+  if (!job?.options || !IDLE.includes(job.state) || job.calibration) return;
+  const size = v.bounds && !v.error ? v.bounds.getSize(new THREE.Vector3()) : null;
+  if (!size) return;
+  resizeBase = { w: size.x, d: size.y, h: size.z, scale: job.options.scale };
+  for (const k of ["w", "d", "h"]) resizeBar.elements[k].value = resizeBase[k].toFixed(1);
+  resizeBar.querySelector("button").disabled = true;
+  $("resize-note").textContent = job.options.copies > 1 ? "(size of all copies together)" : "";
+  resizeBar.hidden = false;
+}
+
+resizeBar.addEventListener("input", (e) => {
+  if (!resizeBase || !["w", "d", "h"].includes(e.target.name)) return;
+  const factor = Number(e.target.value) / resizeBase[e.target.name];
+  if (!(factor > 0)) return;
+  for (const k of ["w", "d", "h"]) if (k !== e.target.name) resizeBar.elements[k].value = (resizeBase[k] * factor).toFixed(1);
+  const pct = resizeBase.scale * factor;
+  const btn = resizeBar.querySelector("button");
+  btn.disabled = Math.abs(factor - 1) < 0.001 || pct < 10 || pct > 1000;
+  $("resize-note").textContent = pct < 10 || pct > 1000 ? "Out of range (10–1000%)" : `Scale ${pct.toFixed(1)}%`;
+});
+
+resizeBar.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const factor = Number(resizeBar.elements.w.value) / resizeBase.w;
+  const scale = Math.round(resizeBase.scale * factor * 100) / 100;
+  const res = await fetch(`/api/jobs/${job.id}/reslice`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...job.options, scale }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    $("resize-note").textContent = body.detail || "Could not re-slice";
+    return;
+  }
+  dlg.close();
+  window.dispatchEvent(new Event("printbridge-jobs-changed"));
+});
 
 /* ---- thumbnails ---- */
 

@@ -10,6 +10,7 @@ p:path exactly as the source wrote them.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -163,6 +164,141 @@ def extract_plate(src: Path, dst: Path, plate_id: int) -> Path:
                         rels,
                     )
                     out.writestr(info, rels.encode("utf-8"))
+                else:
+                    with z.open(info) as fh, out.open(info, "w") as oh:
+                        shutil.copyfileobj(fh, oh)
+    tmp.replace(dst)
+    return dst
+
+
+# ---- inspection: what was this 3MF made for? ------------------------------------
+
+_TRANSFORM_RE = re.compile(r'(<(?:item|component)\b[^>]*?\btransform\s*=\s*")([^"]+)(")', re.S)
+_UNIT_RE = re.compile(r'<model\b[^>]*\bunit\s*=\s*"([^"]+)"')
+_APP_RE = re.compile(r'<metadata\s+name\s*=\s*"Application"\s*>([^<]+)<')
+OUR_BED = (220.0, 220.0)
+
+
+class SourceInfo(BaseModel):
+    application: str | None = None
+    printer: str | None = None
+    bed: tuple[float, float] | None = None
+    units: str = "millimeter"
+    scale: float | None = None  # stored uniform scale factor, when not 1
+    warnings: list[str] = []
+
+
+def _matrix(text: str) -> list[float] | None:
+    try:
+        m = [float(x) for x in text.split()]
+    except ValueError:
+        return None
+    return m if len(m) == 12 else None
+
+
+def _row_scales(m: list[float]) -> tuple[float, float, float]:
+    # 3MF matrices are row-major with row vectors: rows 0-2 are the transformed axes.
+    return tuple((m[i] ** 2 + m[i + 1] ** 2 + m[i + 2] ** 2) ** 0.5 for i in (0, 3, 6))  # type: ignore[return-value]
+
+
+def _bed_from_points(points: list[str]) -> tuple[float, float] | None:
+    try:
+        xy = [tuple(float(v) for v in p.split("x")) for p in points]
+        xs, ys = [p[0] for p in xy], [p[1] for p in xy]
+        return (round(max(xs) - min(xs), 1), round(max(ys) - min(ys), 1))
+    except (ValueError, IndexError):
+        return None
+
+
+def stored_scales(z: zipfile.ZipFile) -> list[float]:
+    """Uniform scale factors stored in item/component transforms (1.0 means unscaled)."""
+    out = []
+    for name in z.namelist():
+        if name.startswith("3D/") and name.endswith(".model"):
+            for m in _TRANSFORM_RE.finditer(z.read(name).decode("utf-8", errors="replace")):
+                mat = _matrix(m.group(2))
+                if mat:
+                    sx, sy, sz = _row_scales(mat)
+                    out.append(round((sx * sy * sz) ** (1 / 3), 4))
+    return out
+
+
+def inspect(path: Path) -> SourceInfo:
+    info = SourceInfo()
+    try:
+        z = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError):
+        return info
+    with z:
+        names = set(z.namelist())
+        if MAIN_MODEL in names:
+            head = z.read(MAIN_MODEL)[:4096].decode("utf-8", errors="replace")
+            if m := _UNIT_RE.search(head):
+                info.units = m.group(1)
+            if m := _APP_RE.search(head):
+                info.application = m.group(1).strip()
+
+        # Bambu Studio / OrcaSlicer project settings (JSON)
+        if "Metadata/project_settings.config" in names:
+            try:
+                cfg = json.loads(z.read("Metadata/project_settings.config"))
+                info.printer = cfg.get("printer_model") or cfg.get("printer_settings_id") or None
+                if isinstance(cfg.get("printable_area"), list):
+                    info.bed = _bed_from_points(cfg["printable_area"])
+            except (ValueError, AttributeError):
+                pass
+        # PrusaSlicer project settings ("; key = value" lines)
+        if "Metadata/Slic3r_PE.config" in names:
+            cfg = {}
+            for line in z.read("Metadata/Slic3r_PE.config").decode("utf-8", errors="replace").splitlines():
+                if line.startswith("; ") and " = " in line:
+                    k, _, v = line[2:].partition(" = ")
+                    cfg[k.strip()] = v.strip()
+            info.printer = info.printer or cfg.get("printer_model") or cfg.get("printer_settings_id") or None
+            if cfg.get("bed_shape"):
+                info.bed = info.bed or _bed_from_points(cfg["bed_shape"].split(","))
+
+        scales = [s for s in stored_scales(z) if abs(s - 1) > 0.005]
+        if scales:
+            info.scale = scales[0] if all(abs(s - scales[0]) < 0.005 for s in scales) else min(scales, key=lambda s: abs(s - 1))
+
+    if info.printer and "ender-3 v3 se" in info.printer.lower():
+        info.printer = None  # made for this printer; nothing to warn about
+    if info.printer or (info.bed and info.bed != OUR_BED):
+        bed = f" ({info.bed[0]:g} × {info.bed[1]:g} mm bed)" if info.bed else ""
+        info.warnings.append(f"Made for {info.printer or 'another printer'}{bed}. Check the size in 3D view; "
+                             "model sites often scale or rearrange files for a specific printer.")
+    if info.scale:
+        info.warnings.append(f"This file scales the model to {info.scale * 100:.0f}% of its original size.")
+    if info.units != "millimeter":
+        info.warnings.append(f"The file uses {info.units} units; it is converted to millimetres.")
+    return info
+
+
+def remove_stored_scale(src: Path, dst: Path) -> Path:
+    """Copy a 3MF with the scale removed from every item/component transform.
+
+    Rotation is kept. Translations are divided by the same factor, so parts laid
+    out next to each other keep their relative spacing.
+    """
+    def fix(m: re.Match) -> str:
+        mat = _matrix(m.group(2))
+        if not mat:
+            return m.group(0)
+        sx, sy, sz = _row_scales(mat)
+        if max(abs(sx - 1), abs(sy - 1), abs(sz - 1)) <= 0.005 or min(sx, sy, sz) == 0:
+            return m.group(0)
+        s = (sx * sy * sz) ** (1 / 3)
+        rows = [v / n for i, n in zip((0, 3, 6), (sx, sy, sz)) for v in mat[i:i + 3]]
+        out = rows + [v / s for v in mat[9:12]]
+        return m.group(1) + " ".join(f"{v:.6g}" for v in out) + m.group(3)
+
+    with zipfile.ZipFile(src) as z:
+        tmp = dst.with_suffix(".tmp")
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+            for info in z.infolist():
+                if info.filename.startswith("3D/") and info.filename.endswith(".model"):
+                    out.writestr(info, _TRANSFORM_RE.sub(fix, z.read(info).decode("utf-8")).encode("utf-8"))
                 else:
                     with z.open(info) as fh, out.open(info, "w") as oh:
                         shutil.copyfileobj(fh, oh)

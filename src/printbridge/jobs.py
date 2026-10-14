@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from .gcode import GcodeStats
 from .slicer import SliceOptions
 from .calibration import CalibrationSpec
-from .threemf import Plate
+from .threemf import Plate, SourceInfo
 
 JobState = Literal["queued", "slicing", "ready", "failed", "sending", "sent", "printing", "printed", "stopped"]
 # States in which the job's files are not being worked on and it may be deleted or re-sliced.
@@ -35,6 +35,8 @@ class Job(BaseModel):
     finished_at: float | None = None
     plates: list[Plate] | None = None
     thumbnail: bool = False
+    source_info: SourceInfo | None = None
+    size: list[float] | None = None  # printed footprint and height in mm (W, D, H)
     calibration: CalibrationSpec | None = None
 
     @property

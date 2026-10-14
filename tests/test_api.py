@@ -174,9 +174,10 @@ async def test_model_preview(client):
     # Cached after the first request, and cleared when the job is re-sliced.
     path = client.main.state.jobs.preview_path(client.main.state.jobs.get(job["id"]))
     assert path.exists()
+    path.write_bytes(b"stale")
     await client.post(f"/api/jobs/{job['id']}/reslice", json={"arrange": False})
     await wait_for(client, job["id"], "ready")
-    assert not path.exists()
+    assert path.read_bytes() != b"stale"  # re-slicing rebuilds the preview
 
 
 async def test_model_preview_errors(client, sample_gcode):

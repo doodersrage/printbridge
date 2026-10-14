@@ -365,6 +365,15 @@
       <p class="viewer-status" id="viewer-status"></p>
       <div class="legend" id="viewer-legend" hidden></div>
     </div>
+    <form class="resize-bar" id="resize-bar" hidden>
+      <span class="small">Size</span>
+      <label>W<input type="number" name="w" min="0.1" step="any"></label>
+      <label>D<input type="number" name="d" min="0.1" step="any"></label>
+      <label>H<input type="number" name="h" min="0.1" step="any"></label>
+      <span class="small muted">mm · proportional</span>
+      <button type="submit" class="primary small-btn" disabled>Resize &amp; re-slice</button>
+      <span class="small muted" id="resize-note"></span>
+    </form>
     <div class="layer-bar" id="layer-bar" hidden>
       <label class="layer-slider">Layer <output id="layer-out"></output>
         <input type="range" id="layer-range" min="1" max="1" value="1">
@@ -381,6 +390,10 @@
       <div class="job-main">
         <div class="job-title"><strong class="job-name"></strong><span class="pill job-state"></span></div>
         <div class="muted small job-meta"></div>
+        <div class="job-warn small" hidden>
+          <span class="warn-text"></span>
+          <button type="button" class="ghost small-btn" data-act="orig-size" hidden></button>
+        </div>
         <label class="plate-pick small" hidden>Plate <select class="job-plate"></select></label>
         <div class="cal-result small" hidden>
           <span class="cal-bands muted"></span>

@@ -366,3 +366,75 @@ def test_dimension_cube(tmp_path):
     assert spec.bands == [] and (b[0], b[1], b[2], b[3]) == (0, 0, 22, 20)
     with pytest.raises(ValueError):
         calibration.result_values("dimension", 20)
+
+
+# ---- wrong-printer / wrong-size 3MF detection --------------------------------
+
+
+def make_project_3mf(path, transform="1 0 0 0 1 0 0 0 1 50 50 0", extra=None, unit="millimeter"):
+    model = (f'<?xml version="1.0"?><model unit="{unit}" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+             '<metadata name="Application">BambuStudio-02.01.00.59</metadata>'
+             '<resources><object id="1" type="model"><mesh><vertices/><triangles/></mesh></object></resources>'
+             f'<build><item objectid="1" transform="{transform}"/></build></model>')
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("3D/3dmodel.model", model)
+        for name, data in (extra or {}).items():
+            z.writestr(name, data)
+    return path
+
+
+def test_inspect_detects_other_printer_and_scale(tmp_path):
+    from printbridge.threemf import inspect
+
+    bambu = make_project_3mf(tmp_path / "a.3mf", "0.8 0 0 0 0.8 0 0 0 0.8 90 90 0", {
+        "Metadata/project_settings.config": json.dumps(
+            {"printer_model": "Bambu Lab A1 mini", "printable_area": ["0x0", "180x0", "180x180", "0x180"]}),
+    })
+    info = inspect(bambu)
+    assert info.printer == "Bambu Lab A1 mini" and info.bed == (180, 180) and info.scale == 0.8
+    assert info.application.startswith("BambuStudio")
+    assert any("A1 mini (180 × 180 mm bed)" in w for w in info.warnings)
+    assert any("80%" in w for w in info.warnings)
+
+    prusa = make_project_3mf(tmp_path / "p.3mf", extra={
+        "Metadata/Slic3r_PE.config": "; printer_model = MK4S\n; bed_shape = 0x0,250x0,250x210,0x210\n"})
+    info = inspect(prusa)
+    assert info.printer == "MK4S" and info.bed == (250, 210) and info.scale is None
+
+    ours = make_project_3mf(tmp_path / "o.3mf", extra={
+        "Metadata/Slic3r_PE.config": "; printer_model = Creality Ender-3 V3 SE\n; bed_shape = 0x0,220x0,220x220,0x220\n"})
+    assert inspect(ours).warnings == []
+
+    inch = make_project_3mf(tmp_path / "i.3mf", unit="inch")
+    assert any("inch units" in w for w in inspect(inch).warnings)
+
+
+def test_remove_stored_scale_keeps_rotation(tmp_path):
+    from printbridge.threemf import inspect, remove_stored_scale
+
+    src = make_project_3mf(tmp_path / "r.3mf", "0 0.5 0 -0.5 0 0 0 0 0.5 40 20 0")
+    out = remove_stored_scale(src, tmp_path / "fixed.3mf")
+    with zipfile.ZipFile(out) as z:
+        model = z.read("3D/3dmodel.model").decode()
+    assert 'transform="0 1 0 -1 0 0 0 0 1 80 40 0"' in model
+    assert inspect(out).scale is None
+
+
+async def test_original_size_option_flow(client, tmp_path):
+    src = make_project_3mf(tmp_path / "mini.3mf", "0.8 0 0 0 0.8 0 0 0 0.8 90 90 0", {
+        "Metadata/project_settings.config": json.dumps({"printer_model": "Bambu Lab A1 mini"})})
+    job = (await client.post("/api/jobs", files={"file": ("mini.3mf", src.read_bytes())})).json()
+    job = await wait_for(client, job["id"], "ready")
+    assert job["source_info"]["scale"] == 0.8 and job["options"]["original_size"] is False
+    r = await client.post(f"/api/jobs/{job['id']}/reslice", json={**job["options"], "original_size": True})
+    assert r.json()["options"]["original_size"] is True
+    await wait_for(client, job["id"], "ready")
+    jobs = client.main.state.jobs
+    unscaled = jobs.dir(jobs.get(job["id"])) / "unscaled-0.3mf"
+    with zipfile.ZipFile(unscaled) as z:
+        assert 'transform="1 0 0 0 1 0 0 0 1 112.5 112.5 0"' in z.read("3D/3dmodel.model").decode()
+
+
+def test_stl_size(tmp_path):
+    p = calibration.write_stl(tmp_path / "s.stl", calibration.box(5, 5, 0, 25, 15, 7.5))
+    assert combine.stl_size(p) == [20.0, 10.0, 7.5]

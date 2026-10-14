@@ -32,6 +32,7 @@ class SliceOptions(BaseModel):
     rotate: float = Field(0, ge=-360, le=360, description="Rotation around Z in degrees")
     copies: int = Field(1, ge=1, le=50)
     plate: int | None = Field(None, ge=1, description="Plate to print from a multi-plate 3MF")
+    original_size: bool = Field(False, description="Ignore a scale factor stored in the 3MF")
 
 
 class SlicerError(RuntimeError):

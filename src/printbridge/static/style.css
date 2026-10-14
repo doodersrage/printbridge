@@ -283,3 +283,11 @@ details.sub[open] summary { margin-bottom: 0.5rem; }
 .cal-kind:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .cal-kind > span { display: flex; flex-direction: column; gap: 0.15rem; }
 .cal-kind input { margin-top: 0.2rem; accent-color: var(--accent); }
+
+.job-warn { margin-top: 0.4rem; padding: 0.35rem 0.55rem; border-radius: 7px; background: var(--warn-soft); color: var(--warn);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.7rem; }
+.job-warn .small-btn { color: var(--text); background: var(--surface); }
+.resize-bar { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 1rem 0; flex-wrap: wrap; }
+.resize-bar[hidden] { display: none; }
+.resize-bar label { flex-direction: row; align-items: center; gap: 0.3rem; }
+.resize-bar input { width: 5.5rem; padding: 0.3rem 0.4rem; }
