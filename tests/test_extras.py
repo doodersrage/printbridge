@@ -1,10 +1,8 @@
-import asyncio
 import io
 import json
 import time
 import zipfile
 from email import message_from_bytes, policy
-from pathlib import Path
 
 import httpx
 import pytest
@@ -15,7 +13,7 @@ from printbridge.jobs import JobStore
 from printbridge.monitor import Monitor
 from printbridge.printers import PrinterStatus, Temperature
 
-from test_api import FakeHost, client, fake_host, set_printer, wait_for  # noqa: F401  (fixtures)
+from conftest import set_printer, wait_for
 
 
 # ---- email ------------------------------------------------------------------
