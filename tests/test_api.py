@@ -72,6 +72,13 @@ async def wait_for(client, job_id, *states):
     raise AssertionError(f"job stuck in {job['state']}")
 
 
+async def test_healthz_reports_version(client):
+    from printbridge import __version__
+
+    r = (await client.get("/healthz")).json()
+    assert r == {"ok": True, "version": __version__} and __version__ == "0.1.0"
+
+
 async def test_index_served(client):
     r = await client.get("/")
     assert r.status_code == 200 and "PrintBridge" in r.text

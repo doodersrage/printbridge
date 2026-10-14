@@ -51,6 +51,21 @@ To update to the latest version:
 docker compose pull && docker compose up -d
 ```
 
+### Versions
+
+Each release is published with matching image tags, and `latest` follows `main`:
+
+| Tag | Tracks |
+| --- | --- |
+| `latest` | every push to `main` |
+| `0.1` | the newest 0.1.x release |
+| `0.1.0` | exactly that release |
+
+To stay on a release line instead of following `main`, set the image in
+`docker-compose.yml` to `ghcr.io/doodersrage/printbridge:0.1`. The running
+version is shown next to the printer name in the header. See
+[CHANGELOG.md](CHANGELOG.md) for what changed in each release.
+
 To build the image yourself, clone the repo and replace the `image:` line in
 `docker-compose.yml` with `build: .`.
 
@@ -121,6 +136,12 @@ three.js is bundled with the app, so the viewer works without internet access.
   them. The file that is currently printing is protected.
 - **Job cleanup:** under **Settings → Storage**, finished jobs can be deleted
   automatically after a number of days. This is off by default.
+
+## Releasing
+
+1. Update `version` in `pyproject.toml`, run `uv lock`, and add a section to `CHANGELOG.md`.
+2. Commit the changes, then tag and push: `git tag -a v0.2.0 -m "PrintBridge 0.2.0" && git push origin main v0.2.0`.
+3. CI publishes the `0.2.0` and `0.2` image tags.
 
 ## Local development
 

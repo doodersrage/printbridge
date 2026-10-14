@@ -701,6 +701,10 @@ api("/api/auth/status").then((a) => {
   });
 }).catch(() => {});
 
+fetch("/healthz").then((r) => r.json()).then((h) => {
+  $$("[data-version]").forEach((el) => { el.textContent = ` · v${h.version}`; });
+}).catch(() => {});
+
 loadProfiles().then(refreshJobs);
 loadPresets();
 refreshPrinter();

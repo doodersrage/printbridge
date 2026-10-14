@@ -29,4 +29,5 @@ echo "$job" | python3 -c 'import json,sys; print("stats:", json.load(sys.stdin)[
 curl -fsS "$BASE/api/jobs/$id/gcode" -o /tmp/smoke.gcode
 grep -q '^G28' /tmp/smoke.gcode
 grep -q '^M420 S1' /tmp/smoke.gcode
+curl -fsS "$BASE/healthz" | python3 -c 'import json,sys; print("version:", json.load(sys.stdin)["version"])'
 echo "smoke test passed ($(wc -c </tmp/smoke.gcode) bytes of G-code)"

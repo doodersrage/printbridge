@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import config, notify, presets, profiles, toolpaths
+from . import __version__, config, notify, presets, profiles, toolpaths
 from .auth import COOKIE_NAME, PUBLIC_PATHS, AuthConfig, load_auth
 from .gcode import parse_stats
 from .jobs import IDLE_STATES, Job, JobStore
@@ -70,7 +70,7 @@ async def lifespan(_: FastAPI):
         t.cancel()
 
 
-app = FastAPI(title="PrintBridge", lifespan=lifespan)
+app = FastAPI(title="PrintBridge", version=__version__, lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 
 
@@ -100,7 +100,7 @@ class LoginRequest(BaseModel):
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True}
+    return {"ok": True, "version": __version__}
 
 
 @app.get("/login", include_in_schema=False)
