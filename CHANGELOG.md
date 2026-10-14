@@ -4,6 +4,22 @@ All notable changes to PrintBridge are listed here. Versions follow
 [Semantic Versioning](https://semver.org/); while the version is 0.x, minor
 releases may include breaking changes.
 
+## [Unreleased]
+
+### Added
+- **Email notifications** over SMTP (STARTTLS, SSL or plain), with a picture of the model on finished and stopped prints.
+- **Home Assistant integration** over MQTT with discovery: status, temperature, progress and time-left sensors; pause, resume, cancel, cool-down and light buttons.
+- **Calibration prints**: temperature tower, retraction test, 20 mm size check and first-layer test, with "Save to profile" for the chosen band.
+- **Live Z** babystepping (`M290`) during a print.
+- **Print history** with monthly and all-time totals, success rate and reprint.
+- **Filament prices** and a cost for each job and print.
+- **Thumbnails** for jobs, also used in emails.
+- **Import from a link**, and **zip uploads** that add every model inside.
+- **Combine** several jobs onto one bed.
+- **Webcam** relay (any MJPEG or snapshot URL).
+- **Backup and restore** of settings, presets, profiles and history.
+- Web app manifest and icons for adding PrintBridge to a phone's home screen.
+
 ## [0.1.0] - 2026-10-14
 
 The first versioned release.

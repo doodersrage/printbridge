@@ -120,28 +120,69 @@ Each job's **3D view** has two tabs:
 
 three.js is bundled with the app, so the viewer works without internet access.
 
+## Calibration
+
+**Calibrate** in the header creates test prints for tuning this printer:
+
+| Test | What to look for | Saves |
+| --- | --- | --- |
+| **Temperature tower** | The band with the least stringing between pillars and the cleanest bridge. Each 8 mm band prints at a different temperature. | Nozzle temperature of the material profile |
+| **Retraction test** | The band with the fewest strings between the two pillars. The length changes every 5 mm. | Retraction length of the material profile |
+| **20 mm size check** | Each side should measure 20.0 mm (±0.2). The bump marks the X side. | – |
+| **First-layer test** | Five single-layer squares across the bed. Use **Live Z** while it prints until the lines are smooth and touching. | – (enter the final offset on the printer's screen) |
+
+Calibration jobs list their bands under the job. Pick the best one and click
+**Save to profile**.
+
+**Live Z** buttons appear on the Printer card during a print. Each press moves
+the nozzle 0.05 mm with `M290` babystepping. ▼ gives more squish and ▲ gives
+less.
+
 ## Printer controls, storage and notifications
 
 - **Controls:** preheat for any material profile, cool down, home, the printer
   light (Wi-Fi Box) and a G-code console. Temperature, homing and G-code
   commands are refused while a print is running.
 - **Busy guard:** **Print** is disabled while the printer is printing or
-  offline, and the server refuses it too. **Upload only** still works.
-- **Print tracking:** a background monitor follows each print, marks the job
-  *printing*, then *printed* or *stopped*, and can notify you through
-  [ntfy](https://ntfy.sh) push notifications and/or a JSON webhook, for example
-  a Home Assistant webhook. Set this up under **Settings → Notifications**.
-- **Printer storage:** list the files on the Wi-Fi Box's microSD card (or on
-  OctoPrint or Moonraker), see which ones PrintBridge uploaded, and delete
-  them. The file that is currently printing is protected.
-- **Job cleanup:** under **Settings → Storage**, finished jobs can be deleted
-  automatically after a number of days. This is off by default.
+  offline, and the server refuses it too.
+- **Notifications** (Settings → Notifications), on start, finish, stop or error:
+  - **ntfy** push notifications to your phone
+  - a **webhook**, for example Home Assistant
+  - **email** over SMTP. Gmail and Outlook need an app password. Finished and stopped emails include a picture of the model.
+- **Home Assistant** (Settings → Home Assistant): publishes to your MQTT broker
+  with discovery, so an *Ender-3 V3 SE* device appears with status,
+  temperature, progress and time-left sensors and pause, resume, cancel,
+  cool-down and light buttons.
+- **Webcam**: point Settings → Webcam at any MJPEG stream or JPEG snapshot URL.
+  PrintBridge relays it to the Printer card.
+- **Print history** (header → History): every finished or stopped print, with
+  time, filament and cost, monthly and all-time totals, and one-click reprint.
+- **Filament prices**: set a price per kg for each material under Settings.
+  Newly sliced jobs then show a cost.
+- **Printer storage**: list and delete files on the Wi-Fi Box's card (or on
+  OctoPrint or Moonraker). The file being printed is protected.
+- **Job cleanup**: finished jobs can be deleted automatically after a number of
+  days.
+- **Backup**: Settings → Backup downloads your settings (including passwords),
+  presets, profile edits and history as a zip, and restores one.
 
-## Releasing
+## Adding models
 
-1. Update `version` in `pyproject.toml`, run `uv lock`, and add a section to `CHANGELOG.md`.
-2. Commit the changes, then tag and push: `git tag -a v0.2.0 -m "PrintBridge 0.2.0" && git push origin main v0.2.0`.
-3. CI publishes the `0.2.0` and `0.2` image tags.
+- Drag in **3MF, STL, OBJ or G-code**, or a **zip**. A zip creates one job per
+  model inside, which suits Thingiverse's "Download all files".
+- **Paste a direct download link** to import a model. Sites such as
+  Thingiverse, Printables and MakerWorld block downloads from apps, so for
+  those, download in your browser and drop the file in.
+- **Combine**: tick two or more jobs and click **Combine selected** to lay them
+  out on one bed. Each keeps its own scale, rotation and copies.
+- Each job gets a **thumbnail**, rendered once in your browser.
+
+## Install as an app
+
+PrintBridge has a web app manifest and icons, so phones can add it to the home
+screen: in Safari use Share → Add to Home Screen, and in Chrome use ⋮ → Add to
+Home screen. Full standalone installation in Chrome needs HTTPS (a reverse
+proxy). Over plain `http://` on your LAN it is added as a shortcut.
 
 ## Local development
 

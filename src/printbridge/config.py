@@ -32,10 +32,28 @@ class NotifyConfig(BaseModel):
     ntfy_url: str = Field("", description="ntfy topic URL, e.g. https://ntfy.sh/my-printer")
     ntfy_token: str = ""
     webhook_url: str = Field("", description="POSTs a JSON event (works with Home Assistant webhooks)")
+    smtp_host: str = ""
+    smtp_port: int = Field(587, ge=1, le=65535)
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    email_from: str = ""
+    email_to: str = Field("", description="Comma-separated recipients")
     on_start: bool = False
     on_finish: bool = True
     on_stop: bool = True
     on_error: bool = True
+
+
+class MqttConfig(BaseModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = Field(1883, ge=1, le=65535)
+    username: str = ""
+    password: str = ""
+    tls: bool = False
+    topic_prefix: str = Field("printbridge", pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    discovery_prefix: str = Field("homeassistant", pattern=r"^[A-Za-z0-9_/-]{1,60}$")
 
 
 class Settings(BaseModel):
@@ -44,6 +62,10 @@ class Settings(BaseModel):
     slice_timeout: int = 900
     keep_days: int = Field(0, ge=0, le=3650, description="Delete finished jobs older than this; 0 keeps them")
     notify: NotifyConfig = NotifyConfig()
+    mqtt: MqttConfig = MqttConfig()
+    currency: str = Field("$", max_length=5)
+    public_url: str = Field("", description="Address PrintBridge is reached at, used for links in emails")
+    webcam_url: str = Field("", description="MJPEG stream or JPEG snapshot URL")
 
 
 def detect_slicer() -> str:

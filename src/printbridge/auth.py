@@ -23,7 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 COOKIE_NAME = "printbridge_session"
-PUBLIC_PATHS = {"/login", "/api/auth/login", "/api/auth/logout", "/healthz", "/style.css"}
+PUBLIC_PATHS = {
+    "/login", "/api/auth/login", "/api/auth/logout", "/healthz", "/style.css", "/manifest.webmanifest",
+    "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-512.png", "/icons/apple-touch-icon.png",
+}
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
 

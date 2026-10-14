@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PrintBridge</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='22' width='24' height='4' rx='1' fill='%23f97316'/><path d='M12 4h8v6l-4 5-4-5z' fill='%23f97316'/></svg>">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#ea580c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="PrintBridge">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -17,6 +23,8 @@
       </div>
     </div>
     <div class="row gap">
+      <button class="ghost" id="open-history" type="button">History</button>
+      <button class="ghost" id="open-calibrate" type="button">Calibrate</button>
       <button class="ghost" id="open-profiles" type="button">Profiles</button>
       <button class="ghost" id="open-settings" type="button">Settings</button>
       <button class="ghost" id="logout" type="button" hidden>Sign out</button>
@@ -29,6 +37,11 @@
         <h2>Printer</h2>
         <span class="pill" id="printer-state">…</span>
       </div>
+      <figure class="webcam" id="webcam" hidden>
+        <img id="webcam-img" alt="Printer webcam">
+        <figcaption class="row gap between"><span class="muted small" id="webcam-status">Webcam</span>
+          <button type="button" class="ghost small-btn" id="webcam-toggle">Pause</button></figcaption>
+      </figure>
       <div class="temps">
         <div><span class="label">Nozzle</span><span class="value" id="t-nozzle">—</span></div>
         <div><span class="label">Bed</span><span class="value" id="t-bed">—</span></div>
@@ -37,6 +50,12 @@
         <div class="file-line"><span id="p-file"></span><span id="p-pct"></span></div>
         <div class="bar"><div id="p-bar"></div></div>
         <div class="muted small" id="p-time"></div>
+        <div class="babystep" id="babystep">
+          <span class="small">Live Z</span>
+          <button type="button" class="small-btn" data-z="-0.05" title="Lower the nozzle 0.05 mm (more squish)">▼ 0.05</button>
+          <button type="button" class="small-btn" data-z="0.05" title="Raise the nozzle 0.05 mm (less squish)">▲ 0.05</button>
+          <span class="small muted" id="babystep-total">±0.00 mm</span>
+        </div>
         <div class="row gap">
           <button type="button" data-ctl="pause">Pause</button>
           <button type="button" data-ctl="resume">Resume</button>
@@ -78,8 +97,12 @@
         <label class="drop" id="drop">
           <input type="file" id="file" accept=".3mf,.stl,.obj,.gcode" required>
           <span class="drop-title" id="drop-title">Drop a 3MF, STL or OBJ here</span>
-          <span class="muted small">or click to choose · G-code files skip slicing</span>
+          <span class="muted small">or click to choose · G-code skips slicing · a zip adds every model inside</span>
         </label>
+        <div class="row gap import-row">
+          <input type="url" id="import-url" placeholder="…or paste a direct download link" aria-label="Model download link">
+          <button type="button" class="ghost" id="import-btn">Import</button>
+        </div>
 
         <div class="grid">
           <label>Quality<select name="quality" id="quality"></select></label>
@@ -114,7 +137,10 @@
     <section class="card wide" id="jobs-card">
       <div class="card-head">
         <h2>Jobs</h2>
-        <span class="muted small" id="slicer-warning"></span>
+        <div class="row gap">
+          <span class="muted small" id="slicer-warning"></span>
+          <button type="button" class="ghost small-btn" id="combine-btn" disabled title="Tick two or more model jobs to lay them out on one bed">Combine selected</button>
+        </div>
       </div>
       <ul id="jobs" class="jobs"></ul>
       <p class="muted empty" id="jobs-empty">No jobs yet. Upload a model to get started.</p>
@@ -151,7 +177,56 @@
           <label class="check"><input type="checkbox" name="on_stop"> Stopped</label>
           <label class="check"><input type="checkbox" name="on_error"> Errors</label>
         </div>
+        <details class="sub">
+          <summary>Email</summary>
+          <div class="grid2">
+            <label>SMTP server<input name="smtp_host" placeholder="smtp.gmail.com"></label>
+            <label>Port<input name="smtp_port" type="number" min="1" max="65535"></label>
+            <label>Security
+              <select name="smtp_security">
+                <option value="starttls">STARTTLS (port 587)</option>
+                <option value="ssl">SSL/TLS (port 465)</option>
+                <option value="none">None (port 25)</option>
+              </select>
+            </label>
+            <label>Username<input name="smtp_username" autocomplete="off"></label>
+            <label>Password<input name="smtp_password" type="password" autocomplete="off" placeholder="app password"></label>
+            <label>From<input name="email_from" placeholder="printer@example.com"></label>
+          </div>
+          <label>Send to<input name="email_to" placeholder="you@example.com, someone@example.com"></label>
+          <p class="muted small">Gmail and Outlook need an app password rather than your normal one. Finished and stopped emails include a picture of the model.</p>
+        </details>
         <div class="row gap"><button type="button" class="ghost" id="notify-test">Save &amp; send test</button><span class="small" id="notify-result"></span></div>
+      </fieldset>
+      <fieldset>
+        <legend>Home Assistant (MQTT)</legend>
+        <p class="muted small">Publishes the printer to Home Assistant through your MQTT broker (for example the Mosquitto add-on). It appears automatically as an "Ender-3 V3 SE" device with temperature, progress and time-left sensors and pause/resume/cancel buttons.</p>
+        <label class="check"><input type="checkbox" name="mqtt_enabled"> Enable</label>
+        <div class="grid2">
+          <label>Broker host<input name="mqtt_host" placeholder="homeassistant.local"></label>
+          <label>Port<input name="mqtt_port" type="number" min="1" max="65535"></label>
+          <label>Username<input name="mqtt_username" autocomplete="off"></label>
+          <label>Password<input name="mqtt_password" type="password" autocomplete="off"></label>
+          <label>Topic prefix<input name="mqtt_topic_prefix"></label>
+          <label>Discovery prefix<input name="mqtt_discovery_prefix"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="mqtt_tls"> Use TLS</label>
+        <p class="small" id="mqtt-status"></p>
+      </fieldset>
+      <fieldset>
+        <legend>Webcam &amp; links</legend>
+        <label>Webcam URL<input name="webcam_url" placeholder="http://camera.local:8080/?action=stream"></label>
+        <p class="muted small">An MJPEG stream or JPEG snapshot URL from any network camera. PrintBridge relays it, so it also works when you reach PrintBridge from outside your LAN.</p>
+        <label>PrintBridge address<input name="public_url" placeholder="http://192.168.12.8:8999"></label>
+        <p class="muted small">Used for links in emails and in Home Assistant.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Filament prices</legend>
+        <div class="grid2">
+          <label>Currency symbol<input name="currency" maxlength="5"></label>
+        </div>
+        <div class="grid2" id="price-fields"></div>
+        <p class="muted small">Price per kg. Saved into each material profile; costs appear on jobs sliced after you change them.</p>
       </fieldset>
       <fieldset>
         <legend>Storage &amp; slicer</legend>
@@ -159,10 +234,64 @@
         <label>PrusaSlicer executable<input name="slicer_path" placeholder="auto-detect"></label>
         <label>Slice timeout (seconds)<input name="slice_timeout" type="number" min="30" max="7200"></label>
       </fieldset>
+      <fieldset>
+        <legend>Backup</legend>
+        <p class="muted small">Settings (including passwords), presets, profile edits and print history. Jobs are not included.</p>
+        <div class="row gap">
+          <a class="button ghost" href="/api/backup" download>Download backup</a>
+          <label class="button ghost file-button">Restore…<input type="file" id="restore-file" accept=".zip" hidden></label>
+          <span class="small" id="restore-result"></span>
+        </div>
+      </fieldset>
       <p class="error" id="settings-err" role="alert"></p>
       <div class="row gap end">
         <button value="cancel" type="button" class="ghost" id="settings-cancel">Cancel</button>
         <button value="save" class="primary" id="settings-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="history" class="wide-dialog" aria-labelledby="history-title">
+    <div class="dialog-head">
+      <h2 id="history-title">Print history</h2>
+      <button type="button" class="ghost" id="history-close" aria-label="Close">✕</button>
+    </div>
+    <div class="stats" id="history-stats"></div>
+    <div class="files-table-wrap">
+      <table class="files-table">
+        <thead><tr><th>Print</th><th>Result</th><th class="num">Time</th><th class="num">Filament</th><th class="num">Cost</th><th>Finished</th><th></th></tr></thead>
+        <tbody id="history-body"></tbody>
+      </table>
+    </div>
+    <p class="muted small" id="history-empty" hidden>No prints recorded yet. Prints are added here when they finish or are stopped.</p>
+  </dialog>
+
+  <dialog id="calibrate" aria-labelledby="calibrate-title">
+    <form id="calibrate-form">
+      <div class="dialog-head">
+        <h2 id="calibrate-title">Calibration print</h2>
+        <button type="button" class="ghost" id="calibrate-close" aria-label="Close">✕</button>
+      </div>
+      <div class="cal-kinds" role="radiogroup">
+        <label class="cal-kind"><input type="radio" name="kind" value="temperature" checked>
+          <span><strong>Temperature tower</strong><span class="muted small">Find the nozzle temperature with the least stringing and the best bridges and surface.</span></span></label>
+        <label class="cal-kind"><input type="radio" name="kind" value="retraction">
+          <span><strong>Retraction test</strong><span class="muted small">Two pillars; the retraction length changes every 5 mm. Pick the cleanest band.</span></span></label>
+        <label class="cal-kind"><input type="radio" name="kind" value="dimension">
+          <span><strong>20 mm size check</strong><span class="muted small">A 20 mm cube. Measure each side to see whether parts come out the right size. The bump marks the X side.</span></span></label>
+        <label class="cal-kind"><input type="radio" name="kind" value="first_layer">
+          <span><strong>First-layer test</strong><span class="muted small">Five single-layer squares across the bed. Use Live Z while it prints to dial in the squish.</span></span></label>
+      </div>
+      <div class="grid2">
+        <label>Material<select name="material" id="cal-material"></select></label>
+        <label class="cal-range">From<input name="start" type="number" step="any"></label>
+        <label class="cal-range">To<input name="end" type="number" step="any"></label>
+        <label class="cal-range">Step<input name="step" type="number" step="any" min="0"></label>
+      </div>
+      <p class="muted small" id="cal-hint"></p>
+      <p class="error" id="cal-err" role="alert"></p>
+      <div class="row gap end">
+        <button type="submit" class="primary">Create &amp; slice</button>
       </div>
     </form>
   </dialog>
@@ -247,10 +376,17 @@
 
   <template id="job-tpl">
     <li class="job">
+      <input type="checkbox" class="job-select" aria-label="Select for combining">
+      <div class="thumb"><img alt="" loading="lazy" hidden></div>
       <div class="job-main">
         <div class="job-title"><strong class="job-name"></strong><span class="pill job-state"></span></div>
         <div class="muted small job-meta"></div>
         <label class="plate-pick small" hidden>Plate <select class="job-plate"></select></label>
+        <div class="cal-result small" hidden>
+          <span class="cal-bands muted"></span>
+          <label>Best band <select class="cal-pick"></select></label>
+          <button type="button" class="ghost small-btn" data-act="cal-save">Save to profile</button>
+        </div>
         <div class="error small job-error"></div>
       </div>
       <div class="job-actions row gap">

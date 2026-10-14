@@ -85,6 +85,11 @@ async function refreshPrinter() {
     $('[data-ctl="resume"]').disabled = !paused;
   }
 
+  $("#babystep").hidden = !isPrinting();
+  const bt = s.babystep_total || 0;
+  $("#babystep-total").textContent = `${bt > 0 ? "+" : bt < 0 ? "−" : "±"}${Math.abs(bt).toFixed(2)} mm`;
+  syncWebcam(s.webcam);
+
   const blocked = !s.online || isPrinting();
   $$("[data-cmd]").forEach((b) => { b.disabled = blocked; });
   $("#gcode-form button").disabled = blocked;
@@ -130,6 +135,46 @@ $$("[data-cmd]").forEach((btn) => {
     }
   });
 });
+
+$$("#babystep [data-z]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const r = await api("/api/printer/command", { method: "POST", json: { command: "babystep", z: Number(btn.dataset.z) } });
+      const t = r.babystep_total;
+      $("#babystep-total").textContent = `${t > 0 ? "+" : t < 0 ? "−" : "±"}${Math.abs(t).toFixed(2)} mm`;
+    } catch (e) { alert(e.message); }
+    btn.disabled = false;
+  });
+});
+
+/* webcam */
+let webcamPaused = false;
+let webcamOn = false;
+function syncWebcam(enabled) {
+  const fig = $("#webcam");
+  fig.hidden = !enabled;
+  const img = $("#webcam-img");
+  const want = enabled && !webcamPaused && !document.hidden;
+  if (want && !webcamOn) {
+    img.src = `/api/webcam?t=${Date.now()}`;
+    webcamOn = true;
+  } else if (!want && webcamOn) {
+    img.removeAttribute("src");
+    webcamOn = false;
+  }
+}
+$("#webcam-img").addEventListener("error", () => {
+  $("#webcam-status").textContent = "Webcam unavailable";
+  webcamOn = false;
+});
+$("#webcam-img").addEventListener("load", () => { $("#webcam-status").textContent = "Webcam"; });
+$("#webcam-toggle").addEventListener("click", (e) => {
+  webcamPaused = !webcamPaused;
+  e.currentTarget.textContent = webcamPaused ? "Resume" : "Pause";
+  syncWebcam(printer.webcam);
+});
+document.addEventListener("visibilitychange", () => syncWebcam(printer.webcam));
 
 $("#light-toggle").addEventListener("click", async (e) => {
   const next = !lightOn;
@@ -256,10 +301,13 @@ function updatePrintButtons() {
   });
 }
 
+const selected = new Set();
+
 function renderJobs(jobs) {
   const snap = JSON.stringify(jobs);
-  // Don't rebuild the list while someone is choosing a plate.
-  if (snap === jobsSnapshot || document.activeElement?.classList.contains("job-plate")) return;
+  // Don't rebuild the list while someone is using a select inside it.
+  const focus = document.activeElement?.classList;
+  if (snap === jobsSnapshot || focus?.contains("job-plate") || focus?.contains("cal-pick")) return;
   jobsSnapshot = snap;
   jobsCache = jobs;
   const list = $("#jobs");
@@ -275,6 +323,43 @@ function renderJobs(jobs) {
     pill.classList.add(STATE_CLASS[job.state] || "x");
     $(".job-meta", li).textContent = jobMeta(job);
     $(".job-error", li).textContent = job.error || "";
+
+    const sel = $(".job-select", li);
+    const combinable = !!job.options && IDLE.includes(job.state) && !job.calibration;
+    sel.disabled = !combinable;
+    sel.checked = combinable && selected.has(job.id);
+    if (!combinable) selected.delete(job.id);
+
+    const img = $(".thumb img", li);
+    if (job.thumbnail) {
+      img.src = `/api/jobs/${job.id}/thumbnail.png?v=${job.stats?.print_seconds ?? ""}${job.options?.scale ?? ""}`;
+      img.hidden = false;
+    }
+
+    const cal = job.calibration;
+    if (cal && cal.bands.length && HAS_GCODE.includes(job.state)) {
+      const box = $(".cal-result", li);
+      box.hidden = false;
+      const unit = cal.kind === "temperature" ? " °C" : " mm";
+      $(".cal-bands", li).textContent = `Bands from the bottom, ${cal.bands[1].z_from - cal.bands[0].z_from} mm each: `
+        + cal.bands.map((b) => `${b.value}${unit}`).join(" → ");
+      const pick = $(".cal-pick", li);
+      cal.bands.forEach((b, i) => pick.append(new Option(`${i + 1}: ${b.value}${unit} (${b.z_from}–${b.z_to} mm)`, b.value)));
+    } else if (cal && cal.kind === "dimension" && HAS_GCODE.includes(job.state)) {
+      const box = $(".cal-result", li);
+      box.hidden = false;
+      box.replaceChildren(Object.assign(document.createElement("span"), {
+        className: "muted",
+        textContent: "Should measure 20.0 mm on every side (the bump is extra, on the X side). Within ±0.2 mm is normal for this printer.",
+      }));
+    } else if (cal && cal.kind === "first_layer" && HAS_GCODE.includes(job.state)) {
+      const box = $(".cal-result", li);
+      box.hidden = false;
+      box.replaceChildren(Object.assign(document.createElement("span"), {
+        className: "muted",
+        textContent: "While it prints, use Live Z on the Printer card until the squares are smooth with no gaps between lines, then enter that offset on the printer's screen to keep it.",
+      }));
+    }
 
     if (job.plates?.length) {
       const pick = $(".plate-pick", li);
@@ -298,13 +383,71 @@ function renderJobs(jobs) {
     list.append(li);
   }
   updatePrintButtons();
+  syncCombine();
+  queueThumbnails(jobs);
 }
+
+function syncCombine() {
+  const n = selected.size;
+  const btn = $("#combine-btn");
+  btn.disabled = n < 2;
+  btn.textContent = n >= 2 ? `Combine ${n} selected` : "Combine selected";
+}
+
+/* thumbnails are rendered in the browser from each job's 3D preview */
+const thumbQueue = new Set();
+let thumbBusy = false;
+function queueThumbnails(jobs) {
+  for (const j of jobs) {
+    if (j.options && !j.thumbnail && HAS_GCODE.includes(j.state)) thumbQueue.add(j.id);
+  }
+  drainThumbnails();
+}
+async function drainThumbnails() {
+  if (thumbBusy || !window.PrintBridgeViewer?.thumbnail) return;
+  const id = thumbQueue.values().next().value;
+  if (!id) return;
+  thumbQueue.delete(id);
+  thumbBusy = true;
+  try {
+    const job = jobsCache.find((j) => j.id === id);
+    if (job && !job.thumbnail) {
+      const blob = await window.PrintBridgeViewer.thumbnail(job);
+      if (blob) {
+        await fetch(`/api/jobs/${id}/thumbnail`, { method: "PUT", body: blob, headers: { "Content-Type": "image/png" } });
+        jobsSnapshot = "";
+      }
+    }
+  } catch { /* a missing thumbnail is not worth bothering anyone about */ }
+  thumbBusy = false;
+  if (thumbQueue.size) setTimeout(drainThumbnails, 200);
+  else refreshJobs();
+}
+window.addEventListener("printbridge-viewer-ready", () => queueThumbnails(jobsCache));
+
+$("#combine-btn").addEventListener("click", async () => {
+  const ids = [...selected];
+  const name = prompt(`Name for the combined plate of ${ids.length} models:`, "combined");
+  if (!name?.trim()) return;
+  try {
+    await api("/api/jobs/combine", { method: "POST", json: { job_ids: ids, name: name.trim(), options: readOptions() } });
+    selected.clear();
+  } catch (e) { alert(e.message); }
+  jobsSnapshot = "";
+  refreshJobs();
+});
 
 async function refreshJobs() {
   try { renderJobs(await api("/api/jobs")); } catch { /* keep the last list on transient errors */ }
 }
 
 $("#jobs").addEventListener("change", async (ev) => {
+  if (ev.target.classList.contains("job-select")) {
+    const id = ev.target.closest(".job").dataset.id;
+    if (ev.target.checked) selected.add(id); else selected.delete(id);
+    syncCombine();
+    return;
+  }
   if (!ev.target.classList.contains("job-plate")) return;
   const job = jobsCache.find((j) => j.id === ev.target.closest(".job").dataset.id);
   ev.target.blur();
@@ -323,6 +466,15 @@ $("#jobs").addEventListener("click", async (ev) => {
   const act = btn.dataset.act;
   if (act === "view") {
     window.PrintBridgeViewer?.open(job, job.options ? "model" : "toolpaths");
+    return;
+  }
+  if (act === "cal-save") {
+    const value = Number($(".cal-pick", btn.closest(".job")).value);
+    try {
+      const r = await api(`/api/jobs/${id}/calibration/apply`, { method: "POST", json: { value } });
+      alert(`Saved to the ${r.material.toUpperCase()} profile: ${Object.entries(r.saved).map(([k, v]) => `${k} = ${v}`).join(", ")}`);
+      loadProfiles();
+    } catch (e) { alert(e.message); }
     return;
   }
   try {
@@ -358,6 +510,28 @@ drop.addEventListener("drop", (e) => {
   e.preventDefault();
   if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; showFile(); }
 });
+
+$("#import-btn").addEventListener("click", async () => {
+  const input = $("#import-url");
+  const url = input.value.trim();
+  if (!url) return;
+  const btn = $("#import-btn");
+  btn.disabled = true;
+  btn.textContent = "Downloading…";
+  $("#upload-err").textContent = "";
+  try {
+    await api("/api/jobs/import", { method: "POST", json: { url, options: readOptions() } });
+    input.value = "";
+    jobsSnapshot = "";
+    refreshJobs();
+  } catch (e) {
+    $("#upload-err").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Import";
+  }
+});
+$("#import-url").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#import-btn").click(); } });
 
 $("#infill").addEventListener("input", (e) => { $("#infill-out").textContent = `${e.target.value}%`; });
 
@@ -479,6 +653,29 @@ $("#preset-delete").addEventListener("click", async () => {
 const dlg = $("#settings");
 const sform = $("#settings-form");
 const NOTIFY_FLAGS = ["on_start", "on_finish", "on_stop", "on_error"];
+const EMAIL_FIELDS = ["smtp_host", "smtp_port", "smtp_security", "smtp_username", "smtp_password", "email_from", "email_to"];
+const MQTT_FIELDS = ["host", "port", "username", "password", "topic_prefix", "discovery_prefix"];
+
+async function loadPrices() {
+  const c = await api("/api/costs");
+  const box = $("#price-fields");
+  box.replaceChildren(...Object.entries(c.prices).map(([m, price]) => {
+    const label = document.createElement("label");
+    label.append(profilesInfo?.materials[m]?.split(" —")[0] ?? m);
+    label.append(Object.assign(document.createElement("input"), { type: "number", min: 0, step: "any", value: price || "", placeholder: "0", name: `price_${m}` }));
+    label.lastChild.dataset.material = m;
+    return label;
+  }));
+}
+
+async function loadMqttStatus() {
+  const el = $("#mqtt-status");
+  try {
+    const m = await api("/api/mqtt/status");
+    el.className = "small " + (m.connected ? "ok-text" : m.error ? "error" : "muted");
+    el.textContent = !m.enabled ? "" : m.connected ? "Connected to the broker ✓" : m.error ? `Not connected: ${m.error}` : "Connecting…";
+  } catch { el.textContent = ""; }
+}
 
 $("#open-settings").addEventListener("click", async () => {
   const s = await api("/api/settings");
@@ -493,6 +690,16 @@ $("#open-settings").addEventListener("click", async () => {
   sform.ntfy_token.value = s.notify.ntfy_token;
   sform.webhook_url.value = s.notify.webhook_url;
   NOTIFY_FLAGS.forEach((k) => { sform[k].checked = s.notify[k]; });
+  for (const k of EMAIL_FIELDS) sform[k].value = s.notify[k] ?? "";
+  sform.mqtt_enabled.checked = s.mqtt.enabled;
+  sform.mqtt_tls.checked = s.mqtt.tls;
+  for (const k of MQTT_FIELDS) sform[`mqtt_${k}`].value = s.mqtt[k] ?? "";
+  sform.webcam_url.value = s.webcam_url;
+  sform.public_url.value = s.public_url || location.origin;
+  sform.currency.value = s.currency;
+  $("#restore-result").textContent = "";
+  loadPrices();
+  loadMqttStatus();
   $("#settings-err").textContent = "";
   $("#notify-result").textContent = "";
   syncHostFields();
@@ -524,9 +731,20 @@ async function saveSettings() {
       ntfy_token: sform.ntfy_token.value.trim(),
       webhook_url: sform.webhook_url.value.trim(),
       ...Object.fromEntries(NOTIFY_FLAGS.map((k) => [k, sform[k].checked])),
+      ...Object.fromEntries(EMAIL_FIELDS.map((k) => [k, k === "smtp_port" ? Number(sform[k].value) || 587 : sform[k].value.trim()])),
     },
+    mqtt: {
+      enabled: sform.mqtt_enabled.checked,
+      tls: sform.mqtt_tls.checked,
+      ...Object.fromEntries(MQTT_FIELDS.map((k) => [k, k === "port" ? Number(sform[`mqtt_${k}`].value) || 1883 : sform[`mqtt_${k}`].value.trim()])),
+    },
+    webcam_url: sform.webcam_url.value.trim(),
+    public_url: sform.public_url.value.trim(),
+    currency: sform.currency.value.trim() || "$",
   };
   await api("/api/settings", { method: "PUT", json: body });
+  const prices = Object.fromEntries($$("#price-fields input").map((i) => [i.dataset.material, Number(i.value) || 0]));
+  await api("/api/costs", { method: "PUT", json: { currency: body.currency, prices } });
 }
 
 sform.addEventListener("submit", async (e) => {
@@ -554,6 +772,134 @@ $("#notify-test").addEventListener("click", async () => {
     out.className = "small error";
     out.textContent = e.message;
   }
+});
+
+$("#restore-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || !confirm("Restore this backup? It replaces your settings, presets and profile edits.")) return;
+  const out = $("#restore-result");
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    const r = await api("/api/restore", { method: "POST", body });
+    out.className = "small ok-text";
+    out.textContent = `Restored ${r.restored.length} files ✓`;
+    setTimeout(() => location.reload(), 1200);
+  } catch (err) {
+    out.className = "small error";
+    out.textContent = err.message;
+  }
+});
+
+/* ---------- history ---------- */
+
+const hdlg = $("#history");
+
+async function loadHistory() {
+  const [h, c] = await Promise.all([api("/api/history"), api("/api/costs")]);
+  const cur = c.currency;
+  const stat = (label, value) => {
+    const d = document.createElement("div");
+    d.append(Object.assign(document.createElement("span"), { className: "label", textContent: label }),
+             Object.assign(document.createElement("span"), { className: "value", textContent: value }));
+    return d;
+  };
+  const t = (x) => [
+    stat("Prints", `${x.prints}${x.success_rate != null ? ` · ${x.success_rate}% ok` : ""}`),
+    stat("Print time", `${x.hours} h`),
+    stat("Filament", x.filament_g >= 1000 ? `${(x.filament_g / 1000).toFixed(2)} kg` : `${x.filament_g} g`),
+    stat("Cost", `${cur}${x.cost.toFixed(2)}`),
+  ];
+  const stats = $("#history-stats");
+  stats.replaceChildren(
+    Object.assign(document.createElement("h3"), { textContent: "This month" }), ...t(h.month),
+    Object.assign(document.createElement("h3"), { textContent: "All time" }), ...t(h.all),
+  );
+  const body = $("#history-body");
+  body.replaceChildren();
+  $("#history-empty").hidden = h.records.length > 0;
+  for (const r of h.records) {
+    const tr = document.createElement("tr");
+    const td = (text, cls = "") => Object.assign(document.createElement("td"), { textContent: text, className: cls });
+    const pill = Object.assign(document.createElement("span"), {
+      className: `pill ${r.result === "printed" ? "ok" : "warn"}`,
+      textContent: r.result === "printed" ? "printed" : `stopped ${Math.round(r.progress ?? 0)}%`,
+    });
+    const res = document.createElement("td");
+    res.append(pill);
+    const act = document.createElement("td");
+    const job = r.job_id && jobsCache.find((j) => j.id === r.job_id);
+    if (job && HAS_GCODE.includes(job.state)) {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: "ghost small-btn", textContent: "Reprint" });
+      b.addEventListener("click", async () => {
+        if (!confirm(`Send ${job.name} to the printer and start printing now?\nMake sure the bed is clear.`)) return;
+        try {
+          await api(`/api/jobs/${job.id}/send`, { method: "POST", json: { start: true } });
+          hdlg.close();
+        } catch (e) { alert(e.message); }
+      });
+      act.append(b);
+    }
+    tr.append(td(r.name), res, td(fmtDuration(r.duration), "num"),
+      td(r.filament_g ? `${r.filament_g} g` : "", "num"), td(r.cost ? `${cur}${r.cost.toFixed(2)}` : "", "num"),
+      td(new Date(r.ended_at * 1000).toLocaleString()), act);
+    body.append(tr);
+  }
+}
+
+$("#open-history").addEventListener("click", () => { hdlg.showModal(); loadHistory(); });
+$("#history-close").addEventListener("click", () => hdlg.close());
+
+/* ---------- calibration ---------- */
+
+const cdlg = $("#calibrate");
+const cform = $("#calibrate-form");
+const CAL_HINTS = {
+  temperature: "°C. The bottom band prints at “From”. Each band is 8 mm tall; up to 12 bands.",
+  retraction: "mm of retraction. The bottom band uses “From”. Each band is 5 mm tall; up to 12 bands.",
+  first_layer: "Prints one layer only, at fixed positions: corners and centre of the bed.",
+  dimension: "About 15 minutes and 4 g of filament. Measure it with calipers (or a ruler) once it has cooled.",
+};
+
+async function syncCalibration() {
+  const kind = cform.kind.value;
+  const ranged = kind === "temperature" || kind === "retraction";
+  $$(".cal-range", cform).forEach((el) => { el.hidden = !ranged; });
+  $("#cal-hint").textContent = CAL_HINTS[kind];
+  $("#cal-err").textContent = "";
+  if (ranged) {
+    const d = await api(`/api/calibration/defaults?kind=${kind}&material=${cform.material.value}`);
+    cform.start.value = d.start;
+    cform.end.value = d.end;
+    cform.step.value = d.step;
+  }
+}
+
+$("#open-calibrate").addEventListener("click", async () => {
+  const sel = $("#cal-material");
+  sel.replaceChildren(...Object.entries(profilesInfo?.materials ?? { pla: "PLA" }).map(([v, l]) => new Option(l.split(" —")[0], v)));
+  sel.value = $("#material").value || "pla";
+  cdlg.showModal();
+  syncCalibration();
+});
+$("#calibrate-close").addEventListener("click", () => cdlg.close());
+cform.addEventListener("change", (e) => { if (e.target.name === "kind" || e.target.name === "material") syncCalibration(); });
+cform.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = {
+    kind: cform.kind.value,
+    material: cform.material.value,
+    start: Number(cform.start.value),
+    end: Number(cform.end.value),
+    step: Number(cform.step.value),
+  };
+  try {
+    await api("/api/calibration", { method: "POST", json: body });
+    cdlg.close();
+    jobsSnapshot = "";
+    refreshJobs();
+  } catch (err) { $("#cal-err").textContent = err.message; }
 });
 
 /* ---------- profile editor ---------- */

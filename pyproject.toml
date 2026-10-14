@@ -7,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "aiomqtt>=2.5",
     "fastapi>=0.143.1",
     "httpx>=0.28.1",
     "python-multipart>=0.0.32",
@@ -22,6 +23,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "aiosmtpd>=1.4.6",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

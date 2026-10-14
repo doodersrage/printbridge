@@ -364,4 +364,48 @@ $("viewer-close").addEventListener("click", () => dlg.close());
 $("viewer-fit").addEventListener("click", fit);
 $("viewer-bed").addEventListener("click", () => frame(bedBox()));
 
-window.PrintBridgeViewer = { open };
+/* ---- thumbnails ---- */
+
+let thumbRenderer = null;
+const THUMB = 256;
+
+async function thumbnail(j) {
+  if (!thumbRenderer) {
+    const c = document.createElement("canvas");
+    c.width = c.height = THUMB;
+    thumbRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    thumbRenderer.setSize(THUMB, THUMB, false);
+  }
+  const res = await fetch(`/api/jobs/${j.id}/preview.stl`);
+  if (!res.ok) return null;
+  const geometry = new STLLoader().parse(await res.arrayBuffer());
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  const s = new THREE.Scene();
+  s.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.9));
+  const key = new THREE.DirectionalLight(0xffffff, 1.7);
+  key.position.set(1, -1.3, 2);
+  s.add(key);
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: "#f97316", roughness: 0.5, metalness: 0.05 }));
+  s.add(mesh);
+
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 5000);
+  cam.up.set(0, 0, 1);
+  const radius = Math.max(size.length() / 2, 1);
+  const dist = radius / Math.sin(THREE.MathUtils.degToRad(15)) * 1.05;
+  const dir = new THREE.Vector3(0.55, -1.0, 0.75).normalize();
+  cam.position.copy(center).addScaledVector(dir, dist);
+  cam.lookAt(center);
+  thumbRenderer.setClearColor(0x000000, 0);
+  thumbRenderer.render(s, cam);
+  const blob = await new Promise((r) => thumbRenderer.domElement.toBlob(r, "image/png"));
+  geometry.dispose();
+  mesh.material.dispose();
+  return blob;
+}
+
+window.PrintBridgeViewer = { open, thumbnail };
+window.dispatchEvent(new Event("printbridge-viewer-ready"));

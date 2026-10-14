@@ -30,7 +30,7 @@ def sent_job(store, name="cube"):
 async def drive(monitor, monkeypatch, statuses):
     events = []
 
-    async def fake_send(cfg, event, message, extra=None, transport=None):
+    async def fake_send(cfg, event, message, extra=None, transport=None, image=None):
         events.append((event, message))
         return []
 

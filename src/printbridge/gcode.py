@@ -12,6 +12,7 @@ _FIELDS = {
     "filament_mm": re.compile(r"^; filament used \[mm\] = ([\d.]+)"),
     "filament_g": re.compile(r"^; (?:total )?filament used \[g\] = ([\d.]+)"),
     "layer_height": re.compile(r"^; layer_height = ([\d.]+)"),
+    "cost": re.compile(r"^; (?:total )?filament cost = ([\d.]+)"),
 }
 _DURATION_RE = re.compile(r"(\d+)\s*([dhms])")
 _UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -24,6 +25,7 @@ class GcodeStats(BaseModel):
     filament_mm: float | None = None
     filament_g: float | None = None
     layer_height: float | None = None
+    cost: float | None = None
     layers: int | None = None
 
 

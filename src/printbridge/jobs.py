@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .gcode import GcodeStats
 from .slicer import SliceOptions
+from .calibration import CalibrationSpec
 from .threemf import Plate
 
 JobState = Literal["queued", "slicing", "ready", "failed", "sending", "sent", "printing", "printed", "stopped"]
@@ -33,6 +34,8 @@ class Job(BaseModel):
     started_print: bool = False
     finished_at: float | None = None
     plates: list[Plate] | None = None
+    thumbnail: bool = False
+    calibration: CalibrationSpec | None = None
 
     @property
     def gcode_name(self) -> str:
@@ -67,6 +70,9 @@ class JobStore:
 
     def preview_path(self, job: Job) -> Path:
         return self.dir(job) / "preview.stl"
+
+    def thumbnail_path(self, job: Job) -> Path:
+        return self.dir(job) / "thumbnail.png"
 
     def toolpath_path(self, job: Job) -> Path:
         return self.dir(job) / "toolpaths.bin"

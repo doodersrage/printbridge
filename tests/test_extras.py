@@ -1,0 +1,368 @@
+import asyncio
+import io
+import json
+import time
+import zipfile
+from email import message_from_bytes, policy
+from pathlib import Path
+
+import httpx
+import pytest
+
+from printbridge import backup, calibration, combine, history, importer, mqtt, notify
+from printbridge.config import MqttConfig, NotifyConfig, Settings
+from printbridge.jobs import JobStore
+from printbridge.monitor import Monitor
+from printbridge.printers import PrinterStatus, Temperature
+
+from test_api import FakeHost, client, fake_host, set_printer, wait_for  # noqa: F401  (fixtures)
+
+
+# ---- email ------------------------------------------------------------------
+
+
+@pytest.fixture
+def smtp_server():
+    from aiosmtpd.controller import Controller
+
+    class Handler:
+        def __init__(self):
+            self.messages = []
+
+        async def handle_DATA(self, server, session, envelope):
+            self.messages.append((envelope.rcpt_tos, envelope.content))
+            return "250 OK"
+
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    handler = Handler()
+    ctl = Controller(handler, hostname="127.0.0.1", port=port)
+    ctl.start()
+    yield port, handler
+    ctl.stop()
+
+
+async def test_email_notification_with_thumbnail(smtp_server):
+    port, handler = smtp_server
+    cfg = NotifyConfig(smtp_host="127.0.0.1", smtp_port=port, smtp_security="none",
+                       email_from="printer@home.lan", email_to="me@example.com, you@example.com")
+    errors = await notify.send(cfg, "finished", "cube finished in 1h 2m",
+                               {"file": "cube.gcode", "filament": "12.3 g", "cost": "$0.31", "url": "http://pb.lan"},
+                               image=b"\x89PNG\r\n\x1a\nfake")
+    assert errors == []
+    rcpts, raw = handler.messages[0]
+    assert rcpts == ["me@example.com", "you@example.com"]
+    msg = message_from_bytes(raw, policy=policy.default)
+    assert msg["Subject"] == "✅ cube finished in 1h 2m" and msg["From"] == "printer@home.lan"
+    text = next(p for p in msg.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode()
+    assert "Filament: 12.3 g" in text and "Cost: $0.31" in text and "http://pb.lan" in text
+    assert any(p.get_content_type() == "image/png" for p in msg.walk())
+
+
+async def test_email_failure_is_reported_not_raised():
+    cfg = NotifyConfig(smtp_host="127.0.0.1", smtp_port=1, smtp_security="none", email_to="me@example.com")
+    errors = await notify.send(cfg, "finished", "x")
+    assert len(errors) == 1 and errors[0].startswith("email")
+
+
+def test_email_requires_host_and_recipient():
+    assert not notify.email_configured(NotifyConfig(smtp_host="smtp.x"))
+    assert notify.email_configured(NotifyConfig(smtp_host="smtp.x", email_to="a@b.c"))
+
+
+# ---- MQTT -------------------------------------------------------------------
+
+
+def test_mqtt_discovery_and_state():
+    cfg = MqttConfig(enabled=True, host="broker", topic_prefix="ender")
+    msgs = dict(mqtt.discovery_messages(cfg, supports_light=False, url="http://pb.lan"))
+    nozzle = msgs["homeassistant/sensor/ender/nozzle/config"]
+    assert nozzle["state_topic"] == "ender/state" and nozzle["device_class"] == "temperature"
+    assert nozzle["device"]["configuration_url"] == "http://pb.lan" and nozzle["unique_id"] == "ender_nozzle"
+    assert msgs["homeassistant/button/ender/cancel/config"]["payload_press"] == "cancel"
+    assert msgs["homeassistant/button/ender/light_on/config"] == {}  # removed when unsupported
+    assert "light_on" in json.dumps(mqtt.discovery_messages(cfg, True))
+
+    st = PrinterStatus(online=True, state="Printing", file="/media/x/cube.gcode", progress=42.26,
+                       nozzle=Temperature(actual=209, target=210), remaining=600.4)
+    payload = mqtt.state_payload(st, None)
+    assert payload["printing"] and payload["progress"] == 42.3 and payload["file"] == "cube.gcode"
+    assert payload["remaining"] == 600 and payload["nozzle_target"] == 210
+    idle = mqtt.state_payload(PrinterStatus(online=True, state="Operational", progress=100), None)
+    assert idle["progress"] == 0 and idle["file"] == ""
+
+
+async def test_mqtt_bridge_publishes_changes_only_and_handles_commands():
+    commands = []
+
+    async def on_command(c):
+        commands.append(c)
+
+    bridge = mqtt.MqttBridge(lambda: MqttConfig(topic_prefix="pb"), on_command, lambda: True, lambda: "")
+    published = []
+
+    class FakeClient:
+        async def publish(self, topic, payload, qos=0, retain=False):
+            published.append((topic, payload, retain))
+
+        @property
+        def messages(self):
+            async def gen():
+                for p in (b"pause", b"explode", b"resume"):
+                    yield type("M", (), {"payload": p})()
+            return gen()
+
+    bridge.client, bridge.connected = FakeClient(), True
+    st = PrinterStatus(online=True, state="Operational")
+    await bridge.publish_state(st, None)
+    await bridge.publish_state(st, None)
+    assert len(published) == 1 and published[0][0] == "pb/state" and published[0][2] is True
+    await bridge._listen(bridge.client)
+    assert commands == ["pause", "resume"]
+
+
+# ---- calibration ------------------------------------------------------------
+
+
+def test_calibration_spec_validation():
+    assert calibration.CalibrationSpec(kind="temperature", start=220, end=190, step=5).values() == [220, 215, 210, 205, 200, 195, 190]
+    assert calibration.CalibrationSpec(kind="retraction", start=0.2, end=1.0, step=0.2).values() == [0.2, 0.4, 0.6, 0.8, 1.0]
+    with pytest.raises(ValueError, match="2 to 12 bands"):
+        calibration.CalibrationSpec(kind="temperature", start=260, end=150, step=5)
+    with pytest.raises(ValueError, match="between 150 and 260"):
+        calibration.CalibrationSpec(kind="temperature", start=300, end=280, step=5)
+    with pytest.raises(ValueError, match="step"):
+        calibration.CalibrationSpec(kind="retraction", start=0.2, end=1, step=0)
+    calibration.CalibrationSpec(kind="first_layer")
+
+
+def test_calibration_generate_and_post_process(tmp_path):
+    spec = calibration.generate(calibration.CalibrationSpec(kind="temperature", start=210, end=200, step=5), tmp_path / "t.stl")
+    assert [(b.z_from, b.z_to, b.value) for b in spec.bands] == [(1.0, 9.0, 210), (9.0, 17.0, 205), (17.0, 25.0, 200)]
+    mesh = combine.read_stl(tmp_path / "t.stl", "t")
+    assert mesh.bounds()[4] == 0 and max(v[2] for v in mesh.vertices) == 25.0
+
+    g = tmp_path / "t.gcode"
+    g.write_text("".join(f";LAYER_CHANGE\n;Z:{z}\nG1 X1 Y1 E1\n" for z in (0.24, 1.2, 8.8, 9.2, 17.0, 24.8)))
+    assert calibration.post_process(g, spec) == 3
+    temps = [ln for ln in g.read_text().splitlines() if ln.startswith("M104")]
+    assert [t.split()[1] for t in temps] == ["S210", "S205", "S200"]
+
+    r = calibration.generate(calibration.CalibrationSpec(kind="retraction", start=0.4, end=0.8, step=0.4), tmp_path / "r.stl")
+    g.write_text(";Z:0.2\nG1 E-.8 F2400\n;Z:0.8\nG1 E-.8 F2400\nG1 X5 E.2\nG1 E.8 F2400\n;Z:5.8\nG1 E-.8 F2400\n")
+    assert calibration.post_process(g, r) == 3
+    lines = g.read_text().splitlines()
+    assert lines[1] == "G1 E-.8 F2400"  # base layers keep the profile value
+    assert lines[3].startswith("G1 E-0.4 F2400") and lines[5].startswith("G1 E0.4 F2400") and lines[7].startswith("G1 E-0.8")
+
+
+def test_first_layer_pads_cover_the_bed(tmp_path):
+    spec = calibration.generate(calibration.CalibrationSpec(kind="first_layer", first_layer_height=0.2), tmp_path / "f.stl")
+    b = combine.read_stl(tmp_path / "f.stl", "f").bounds()
+    assert spec.bands == [] and b[0] == 22 and b[2] == 198 and max(v[2] for v in combine.read_stl(tmp_path / "f.stl", "f").vertices) == 0.2
+
+
+# ---- combine ----------------------------------------------------------------
+
+
+def test_pack_layout_and_errors():
+    corners = combine.pack([(50, 40), (50, 40), (100, 20)])
+    rects = [(x, y, x + w, y + d) for (x, y), (w, d) in zip(corners, [(50, 40), (50, 40), (100, 20)])]
+    for i, a in enumerate(rects):
+        assert a[0] >= 0 and a[1] >= 0 and a[2] <= 220 and a[3] <= 220
+        for b in rects[i + 1:]:
+            assert a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+    with pytest.raises(combine.CombineError, match="does not fit"):
+        combine.pack([(230, 10)])
+    with pytest.raises(combine.CombineError, match="do not all fit"):
+        combine.pack([(200, 150), (200, 150)])
+
+
+def test_combine_writes_3mf(tmp_path):
+    a = tmp_path / "a.stl"
+    calibration.write_stl(a, calibration.box(100, 100, 5, 120, 110, 15))
+    meshes = [combine.read_stl(a, "A"), combine.read_stl(a, "B & <c>")]
+    out = combine.combine(meshes, tmp_path / "c.3mf")
+    with zipfile.ZipFile(out) as z:
+        model = z.read("3D/3dmodel.model").decode()
+    assert model.count("<item ") == 2 and 'name="B &amp; &lt;c&gt;"' in model
+    assert "-5.0000" in model  # lifted down to the bed
+    with pytest.raises(combine.CombineError):
+        combine.combine(meshes[:1], tmp_path / "x.3mf")
+
+
+# ---- import -----------------------------------------------------------------
+
+
+async def test_import_direct_file_and_zip():
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w") as z:
+        z.writestr("thing/files/part.stl", b"solid")
+        z.writestr("thing/README.txt", b"hi")
+        z.writestr("__MACOSX/._part.stl", b"junk")
+
+    def handler(r: httpx.Request):
+        if r.url.path == "/part.3mf":
+            return httpx.Response(200, content=b"PK3mf", headers={"content-type": "application/octet-stream"})
+        if r.url.path == "/dl":
+            return httpx.Response(200, content=zbuf.getvalue(), headers={"content-disposition": 'attachment; filename="thing.zip"'})
+        if r.url.path == "/page":
+            return httpx.Response(200, text="<html>", headers={"content-type": "text/html"})
+        return httpx.Response(429)
+
+    t = httpx.MockTransport(handler)
+    assert await importer.download("https://example.com/part.3mf", t) == [("part.3mf", b"PK3mf")]
+    assert await importer.download("https://example.com/dl", t) == [("part.stl", b"solid")]
+    with pytest.raises(importer.ImportError_, match="web page"):
+        await importer.download("https://example.com/page", t)
+    with pytest.raises(importer.ImportError_, match="does not allow downloads"):
+        await importer.download("https://www.thingiverse.com/thing:1/zip", t)
+    with pytest.raises(importer.ImportError_, match="http"):
+        importer.normalise("file:///etc/passwd")
+
+
+# ---- backup -----------------------------------------------------------------
+
+
+async def test_backup_roundtrip(client):
+    from printbridge import config
+
+    await client.put("/api/presets/Fast", json={"quality": "draft"})
+    await client.put("/api/profile-files/material/asa", json={"text": "# ASA\ntemperature = 250\n"})
+    s = (await client.get("/api/settings")).json()
+    s["currency"] = "€"
+    await client.put("/api/settings", json=s)
+    blob = (await client.get("/api/backup")).content
+    names = zipfile.ZipFile(io.BytesIO(blob)).namelist()
+    assert {"config.json", "presets.json", "profiles/material/asa.ini"} <= set(names) and "secret_key" not in names
+
+    await client.delete("/api/presets/Fast")
+    (config.DATA_DIR / "profiles/material/asa.ini").unlink()
+    r = await client.post("/api/restore", files={"file": ("b.zip", blob)})
+    assert r.status_code == 200
+    assert "Fast" in (await client.get("/api/presets")).json()
+    assert (await client.get("/api/settings")).json()["currency"] == "€"
+    assert "asa" in (await client.get("/api/profiles")).json()["materials"]
+
+
+def test_restore_rejects_bad_archives(tmp_path):
+    with pytest.raises(backup.BackupError, match="not a zip"):
+        backup.restore(b"nope")
+    for name, data in [("../../etc/x", b"x"), ("profiles/../config.json", b"{}"), ("config.json", b'{"printer": 5}')]:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("printbridge-backup.json", "{}")
+            z.writestr(name, data)
+        with pytest.raises((backup.BackupError, ValueError)):
+            backup.restore(buf.getvalue())
+
+
+# ---- history ----------------------------------------------------------------
+
+
+async def test_monitor_records_history(tmp_path, monkeypatch):
+    from printbridge import config
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    store = JobStore(tmp_path / "jobs")
+    job = store.create("cube.3mf", None)
+    from printbridge.gcode import GcodeStats
+
+    store.update(job, state="sent", sent_at=time.time(), stats=GcodeStats(filament_g=20.0, cost=0.5))
+    sent = []
+
+    async def fake_send(cfg, event, message, extra=None, transport=None, image=None):
+        sent.append((event, extra))
+        return []
+
+    monkeypatch.setattr(notify, "send", fake_send)
+    m = Monitor(lambda: Settings(currency="€"), store)
+    for st in (PrinterStatus(online=True, state="Printing", file="cube.gcode", progress=10, elapsed=60),
+               PrinterStatus(online=True, state="Printing", file="cube.gcode", progress=50, elapsed=1800),
+               PrinterStatus(online=True, state="Operational", progress=50)):
+        m.status = st
+        await m._track(st)
+    rec = history.load()[-1]
+    assert rec.result == "stopped" and rec.progress == 50 and rec.filament_g == 10.0 and rec.cost == 0.25
+    assert rec.duration == 1800 and rec.job_id == job.id
+    assert sent[-1][1]["cost"] == "€0.25"
+    summ = history.summary()
+    assert summ["all"]["prints"] == 1 and summ["all"]["success_rate"] == 0.0 and summ["month"]["hours"] == 0.5
+
+
+# ---- API: calibration, thumbnails, costs, babystep, zip upload --------------
+
+
+async def test_calibration_api(client, tmp_path):
+    d = (await client.get("/api/calibration/defaults", params={"kind": "temperature", "material": "petg"})).json()
+    assert d == {"start": 250, "end": 220, "step": 5}
+    r = await client.post("/api/calibration", json={"kind": "temperature", "material": "pla", "start": 215, "end": 205, "step": 5})
+    assert r.status_code == 201
+    job = await wait_for(client, r.json()["id"], "ready", "failed")
+    assert job["calibration"]["kind"] == "temperature" and len(job["calibration"]["bands"]) == 3
+    assert job["options"]["nozzle_temp"] == 215
+    assert (await client.post(f"/api/jobs/{job['id']}/calibration/apply", json={"value": 999})).status_code == 422
+    r = await client.post(f"/api/jobs/{job['id']}/calibration/apply", json={"value": 210})
+    assert r.json()["saved"] == {"temperature": "210", "first_layer_temperature": "210"}
+    assert (await client.get("/api/profiles")).json()["preheat"]["pla"]["nozzle"] == 210
+    bad = await client.post("/api/calibration", json={"kind": "retraction", "start": 0.2, "end": 9, "step": 0.1})
+    assert bad.status_code == 422 and "bands" in bad.json()["detail"]
+
+
+async def test_thumbnail_api(client, sample_gcode):
+    job = (await client.post("/api/jobs", files={"file": ("p.gcode", sample_gcode.read_bytes())})).json()
+    assert (await client.get(f"/api/jobs/{job['id']}/thumbnail.png")).status_code == 404
+    assert (await client.put(f"/api/jobs/{job['id']}/thumbnail", content=b"GIF89a")).status_code == 422
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 100
+    assert (await client.put(f"/api/jobs/{job['id']}/thumbnail", content=png)).status_code == 204
+    assert (await client.get(f"/api/jobs/{job['id']}")).json()["thumbnail"] is True
+    assert (await client.get(f"/api/jobs/{job['id']}/thumbnail.png")).content == png
+
+
+async def test_costs_api(client):
+    r = await client.put("/api/costs", json={"currency": "£", "prices": {"pla": 22.5, "petg": 0}})
+    assert r.json()["currency"] == "£" and r.json()["prices"]["pla"] == 22.5
+    files = (await client.get("/api/profile-files")).json()
+    assert next(f for f in files if f["name"] == "pla")["overridden"] is True
+    assert next(f for f in files if f["name"] == "petg")["overridden"] is False  # unchanged zero isn't written
+    assert (await client.put("/api/costs", json={"prices": {"pla": -1}})).status_code == 422
+
+
+async def test_babystep_allowed_while_printing(client, monkeypatch, fake_host):
+    set_printer(client, monkeypatch, "Printing", file="x.gcode")
+    r = await client.post("/api/printer/command", json={"command": "babystep", "z": -0.05})
+    assert r.json()["babystep_total"] == -0.05 and fake_host.gcode == ["M290 Z-0.050"]
+    r = await client.post("/api/printer/command", json={"command": "babystep", "z": 0.02})
+    assert r.json()["babystep_total"] == -0.03
+    assert (await client.post("/api/printer/command", json={"command": "babystep", "z": 2})).status_code == 422
+
+
+async def test_zip_upload_creates_a_job_per_model(client, sample_gcode):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("a.3mf", b"PK a")
+        z.writestr("dir/b.stl", b"solid b")
+        z.writestr("c.gcode", sample_gcode.read_bytes())
+        z.writestr("notes.pdf", b"%PDF")
+    r = await client.post("/api/jobs", files={"file": ("bundle.zip", buf.getvalue())})
+    assert r.status_code == 201
+    names = sorted(j["name"] for j in (await client.get("/api/jobs")).json())
+    assert names == ["a", "b", "c"]
+
+
+async def test_combine_api_rejects_gcode_jobs(client, sample_gcode):
+    g = (await client.post("/api/jobs", files={"file": ("p.gcode", sample_gcode.read_bytes())})).json()
+    m = (await client.post("/api/jobs", files={"file": ("m.3mf", b"PK")})).json()
+    r = await client.post("/api/jobs/combine", json={"job_ids": [g["id"], m["id"]]})
+    assert r.status_code == 400
+
+
+def test_dimension_cube(tmp_path):
+    spec = calibration.generate(calibration.CalibrationSpec(kind="dimension"), tmp_path / "c.stl")
+    b = combine.read_stl(tmp_path / "c.stl", "c").bounds()
+    assert spec.bands == [] and (b[0], b[1], b[2], b[3]) == (0, 0, 22, 20)
+    with pytest.raises(ValueError):
+        calibration.result_values("dimension", 20)

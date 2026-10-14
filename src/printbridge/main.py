@@ -9,22 +9,25 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
+import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import __version__, config, notify, presets, profiles, toolpaths
+from . import __version__, backup, calibration, combine, config, history, importer, notify, presets, profiles, toolpaths
 from .auth import COOKIE_NAME, PUBLIC_PATHS, AuthConfig, load_auth
 from .gcode import parse_stats
 from .jobs import IDLE_STATES, Job, JobStore
 from .monitor import ACTIVE, Monitor
+from .mqtt import MqttBridge
 from .printers import PrinterError, PrinterStatus, RemoteFile, make_host
 from .slicer import SliceOptions, SlicerError, check_options, export_preview, slice_model
 from .threemf import ThreeMFError, extract_plate, read_plates
 
-ACCEPTED = {".3mf", ".stl", ".obj", ".gcode"}
+ACCEPTED = {".3mf", ".stl", ".obj", ".gcode", ".zip"}
+MAX_THUMBNAIL = 1024 * 1024
 MAX_UPLOAD = 256 * 1024 * 1024
 STATIC_DIR = Path(__file__).parent / "static"
 PRUNE_INTERVAL = 3600
@@ -37,6 +40,7 @@ class State:
     auth: AuthConfig
     jobs: JobStore
     monitor: Monitor
+    mqtt: MqttBridge
     # PrusaSlicer is memory hungry; slice one model at a time.
     slice_lock: asyncio.Lock
     preview_lock: asyncio.Lock
@@ -60,10 +64,13 @@ async def lifespan(_: FastAPI):
     state.auth = load_auth(config.DATA_DIR)
     state.jobs = JobStore(config.DATA_DIR / "jobs")
     state.monitor = Monitor(lambda: state.settings, state.jobs)
+    state.mqtt = MqttBridge(lambda: state.settings.mqtt, mqtt_command, supports_light, lambda: state.settings.public_url)
+    state.monitor.listeners.append(state.mqtt.publish_state)
     state.slice_lock = asyncio.Lock()
     state.preview_lock = asyncio.Lock()
     state.tasks = set()
     spawn(state.monitor.run())
+    spawn(state.mqtt.run())
     spawn(prune_loop())
     yield
     for t in state.tasks:
@@ -195,6 +202,51 @@ def clear_derived(job: Job) -> None:
     """Remove cached previews; they are rebuilt on demand from the new slice."""
     state.jobs.preview_path(job).unlink(missing_ok=True)
     state.jobs.toolpath_path(job).unlink(missing_ok=True)
+    state.jobs.thumbnail_path(job).unlink(missing_ok=True)
+    job.thumbnail = False
+
+
+def supports_light() -> bool:
+    try:
+        return make_host(state.settings.printer).supports_light if state.settings.printer.url else False
+    except PrinterError:
+        return False
+
+
+async def mqtt_command(command: str) -> None:
+    h = make_host(state.settings.printer)
+    if command in ("pause", "resume", "cancel"):
+        await h.control(command)
+    elif command == "cooldown":
+        st = await state.monitor.current(max_age=2)
+        if st.state in ACTIVE:
+            raise PrinterError("Not cooling down while printing")
+        await h.command("cooldown")
+    else:
+        await h.command(command)
+    state.monitor.status = None
+
+
+def add_job(filename: str, data: bytes, opts: SliceOptions) -> Job:
+    """Create a job from an uploaded or downloaded file and start slicing it."""
+    ext = Path(filename).suffix.lower()
+    is_gcode = ext == ".gcode"
+    job = state.jobs.create(filename, None if is_gcode else opts)
+    dest = state.jobs.source_path(job)
+    dest.write_bytes(data)
+    return _finish_job(job, ext, opts)
+
+
+def _finish_job(job: Job, ext: str, opts: SliceOptions) -> Job:
+    dest = state.jobs.source_path(job)
+    if ext == ".gcode":
+        dest.rename(state.jobs.gcode_path(job))
+        return state.jobs.update(job, source=job.gcode_name, state="ready", stats=parse_stats(state.jobs.gcode_path(job)))
+    if ext == ".3mf" and (plates := read_plates(dest)):
+        plate = opts.plate if opts.plate in {p.id for p in plates} else plates[0].id
+        state.jobs.update(job, plates=plates, options=opts.model_copy(update={"plate": plate}))
+    spawn(run_slice(job))
+    return job
 
 
 async def run_slice(job: Job) -> None:
@@ -211,6 +263,8 @@ async def run_slice(job: Job) -> None:
                 job.options or SliceOptions(),
                 state.settings.slice_timeout,
             )
+            if job.calibration:
+                calibration.post_process(out, job.calibration)
             jobs.update(job, state="ready", stats=parse_stats(out))
         except (SlicerError, profiles.ProfileError) as e:
             jobs.update(job, state="failed", error=str(e))
@@ -243,13 +297,14 @@ async def put_settings(settings: config.Settings) -> config.Settings:
     config.save_settings(settings)
     state.settings = settings
     state.monitor.status = None  # re-poll with the new printer settings
+    state.mqtt.restart()
     return settings
 
 
 @app.post("/api/notify/test")
 async def notify_test() -> dict:
     cfg = state.settings.notify
-    if not (cfg.ntfy_url or cfg.webhook_url):
+    if not (cfg.ntfy_url or cfg.webhook_url or notify.email_configured(cfg)):
         raise HTTPException(400, "No notification target configured")
     errors = await notify.send(cfg, "test", "Notifications from PrintBridge are working.")
     if errors:
@@ -350,6 +405,7 @@ async def list_jobs() -> list[Job]:
 
 @app.post("/api/jobs", status_code=201)
 async def create_job(file: UploadFile = File(...), options: str = Form("{}")) -> Job:
+    """Upload a model (or G-code) and slice it. A zip creates one job per model inside; the first is returned."""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ACCEPTED:
         raise HTTPException(400, f"Unsupported file type {ext or '(none)'}; expected one of {', '.join(sorted(ACCEPTED))}")
@@ -357,11 +413,19 @@ async def create_job(file: UploadFile = File(...), options: str = Form("{}")) ->
         opts = SliceOptions.model_validate_json(options)
     except ValidationError as e:
         raise HTTPException(422, e.errors(include_url=False))
-
-    is_gcode = ext == ".gcode"
-    if not is_gcode:
+    if ext != ".gcode":
         validate_options(opts)
-    job = state.jobs.create(file.filename or f"model{ext}", None if is_gcode else opts)
+
+    if ext == ".zip":
+        data = await _read_upload(file)
+        try:
+            files = importer.from_zip(data)
+        except (importer.ImportError_, ValueError) as e:
+            raise HTTPException(422, str(e))
+        jobs = [add_job(name, blob, opts) for name, blob in files]
+        return jobs[0]
+
+    job = state.jobs.create(file.filename or f"model{ext}", None if ext == ".gcode" else opts)
     dest = state.jobs.source_path(job)
     size = 0
     with dest.open("wb") as fh:
@@ -371,15 +435,67 @@ async def create_job(file: UploadFile = File(...), options: str = Form("{}")) ->
                 state.jobs.delete(job)
                 raise HTTPException(413, "File too large")
             fh.write(chunk)
+    return _finish_job(job, ext, opts)
 
-    if is_gcode:
-        dest.rename(state.jobs.gcode_path(job))
-        state.jobs.update(job, source=job.gcode_name, state="ready", stats=parse_stats(state.jobs.gcode_path(job)))
-        return job
 
-    if ext == ".3mf" and (plates := read_plates(dest)):
-        plate = opts.plate if opts.plate in {p.id for p in plates} else plates[0].id
-        state.jobs.update(job, plates=plates, options=opts.model_copy(update={"plate": plate}))
+async def _read_upload(file: UploadFile, limit: int = MAX_UPLOAD) -> bytes:
+    chunks, size = [], 0
+    while chunk := await file.read(1 << 20):
+        size += len(chunk)
+        if size > limit:
+            raise HTTPException(413, "File too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+class ImportRequest(BaseModel):
+    url: str = Field(..., max_length=2000)
+    options: SliceOptions = SliceOptions()
+
+
+@app.post("/api/jobs/import", status_code=201)
+async def import_job(req: ImportRequest) -> list[Job]:
+    validate_options(req.options)
+    try:
+        files = await importer.download(req.url)
+    except importer.ImportError_ as e:
+        raise HTTPException(422, str(e))
+    return [add_job(name, data, req.options) for name, data in files]
+
+
+class CombineRequest(BaseModel):
+    job_ids: list[str] = Field(..., min_length=2, max_length=20)
+    name: str = Field("combined", max_length=80)
+    options: SliceOptions = SliceOptions()
+
+
+@app.post("/api/jobs/combine", status_code=201)
+async def combine_jobs(req: CombineRequest) -> Job:
+    """Lay several models out on one bed as a new job."""
+    validate_options(req.options)
+    sources = [require_job(i) for i in req.job_ids]
+    if any(j.options is None for j in sources):
+        raise HTTPException(400, "Uploaded G-code can't be combined; choose model jobs")
+    meshes = []
+    async with state.preview_lock:
+        for j in sources:
+            stl = state.jobs.dir(j) / "combine.stl"
+            try:
+                # Each model keeps its own scale, rotation and copies.
+                await export_preview(state.settings.slicer_path, model_input(j), stl,
+                                     j.options.model_copy(update={"arrange": True}))
+                meshes.append(combine.read_stl(stl, j.name))
+            except (SlicerError, combine.CombineError) as e:
+                raise HTTPException(422, f"{j.name}: {e}")
+            finally:
+                stl.unlink(missing_ok=True)
+    opts = req.options.model_copy(update={"scale": 100, "rotate": 0, "copies": 1, "plate": None, "arrange": True})
+    job = state.jobs.create(f"{req.name}.3mf", opts)
+    try:
+        await asyncio.to_thread(combine.combine, meshes, state.jobs.source_path(job))
+    except combine.CombineError as e:
+        state.jobs.delete(job)
+        raise HTTPException(422, str(e))
     spawn(run_slice(job))
     return job
 
@@ -478,6 +594,197 @@ async def delete_job(job_id: str) -> None:
     state.jobs.delete(job)
 
 
+# ---- thumbnails -------------------------------------------------------------
+
+
+@app.put("/api/jobs/{job_id}/thumbnail", status_code=204)
+async def put_thumbnail(job_id: str, request: Request) -> None:
+    """Store a PNG thumbnail rendered by the browser from the job's 3D preview."""
+    job = require_job(job_id)
+    data = await request.body()
+    if len(data) > MAX_THUMBNAIL or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(422, "Expected a PNG image under 1 MB")
+    state.jobs.thumbnail_path(job).write_bytes(data)
+    state.jobs.update(job, thumbnail=True)
+
+
+@app.get("/api/jobs/{job_id}/thumbnail.png")
+async def get_thumbnail(job_id: str) -> FileResponse:
+    path = state.jobs.thumbnail_path(require_job(job_id))
+    if not path.exists():
+        raise HTTPException(404, "No thumbnail yet")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+# ---- calibration --------------------------------------------------------------
+
+
+@app.get("/api/calibration/defaults")
+async def calibration_defaults(kind: calibration.Kind, material: str = "pla") -> dict:
+    d = calibration.defaults(kind, material)
+    return {"start": d[0], "end": d[1], "step": d[2]} if d else {}
+
+
+class CalibrationRequest(BaseModel):
+    kind: calibration.Kind
+    material: str = "pla"
+    quality: str = "standard"
+    start: float = 0
+    end: float = 0
+    step: float = 0
+
+
+@app.post("/api/calibration", status_code=201)
+async def create_calibration(req: CalibrationRequest) -> Job:
+    opts = SliceOptions(material=req.material, quality=req.quality, infill=15)
+    validate_options(opts)
+    if req.kind == "temperature":
+        opts.nozzle_temp = int(req.start)
+    if req.kind == "first_layer":
+        opts.arrange = False  # the pads are placed at fixed bed positions
+    if req.kind == "dimension":
+        opts.infill = 20
+    try:
+        flh = float(profiles.read_values(profiles.resolve("quality", req.quality)).get("first_layer_height", 0.24))
+        spec = calibration.CalibrationSpec(kind=req.kind, start=req.start, end=req.end, step=req.step,
+                                           first_layer_height=flh)
+    except ValidationError as e:
+        raise HTTPException(422, "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors()))
+    title = {"temperature": "temperature-tower", "retraction": "retraction-test", "first_layer": "first-layer-test",
+             "dimension": "20mm-cube"}[req.kind]
+    job = state.jobs.create(f"{title}-{req.material}.stl", opts)
+    spec = calibration.generate(spec, state.jobs.source_path(job))
+    state.jobs.update(job, calibration=spec)
+    spawn(run_slice(job))
+    return job
+
+
+class CalibrationResult(BaseModel):
+    value: float
+
+
+@app.post("/api/jobs/{job_id}/calibration/apply")
+async def apply_calibration(job_id: str, req: CalibrationResult) -> dict:
+    """Save the chosen band's value into the job's material profile."""
+    job = require_job(job_id)
+    if not job.calibration or not job.options:
+        raise HTTPException(400, "This job is not a calibration print")
+    if req.value not in [b.value for b in job.calibration.bands]:
+        raise HTTPException(422, "Choose one of the printed values")
+    try:
+        values = calibration.result_values(job.calibration.kind, req.value)
+        profiles.set_values("material", job.options.material, values)
+    except (ValueError, profiles.ProfileError) as e:
+        raise HTTPException(422, str(e))
+    return {"material": job.options.material, "saved": values}
+
+
+# ---- history & costs ----------------------------------------------------------
+
+
+@app.get("/api/history")
+async def get_history(limit: int = 200) -> dict:
+    return history.summary(limit=max(1, min(limit, 2000)))
+
+
+class CostsRequest(BaseModel):
+    currency: str = Field("$", max_length=5)
+    prices: dict[str, float] = {}
+
+
+@app.get("/api/costs")
+async def get_costs() -> dict:
+    prices = {}
+    for m in profiles.names("material"):
+        try:
+            prices[m] = float(profiles.read_values(profiles.resolve("material", m)).get("filament_cost", 0) or 0)
+        except ValueError:
+            prices[m] = 0.0
+    return {"currency": state.settings.currency, "prices": prices}
+
+
+@app.put("/api/costs")
+async def put_costs(req: CostsRequest) -> dict:
+    """Store prices (per kg) in the material profiles, where PrusaSlicer uses them for cost estimates."""
+    for material, price in req.prices.items():
+        if price < 0 or price > 10000:
+            raise HTTPException(422, f"Price for {material} must be between 0 and 10000")
+        try:
+            current = profiles.read_values(profiles.resolve("material", material)).get("filament_cost")
+            if current is None and price == 0:
+                continue
+            if current is None or float(current or 0) != price:
+                profiles.set_values("material", material, {"filament_cost": f"{price:g}"})
+        except profiles.ProfileError as e:
+            raise HTTPException(422, str(e))
+    if req.currency != state.settings.currency:
+        state.settings.currency = req.currency
+        config.save_settings(state.settings)
+    return await get_costs()
+
+
+# ---- webcam -------------------------------------------------------------------
+
+
+@app.get("/api/webcam")
+async def webcam() -> Response:
+    """Proxy the configured webcam so the browser only ever talks to PrintBridge."""
+    url = state.settings.webcam_url
+    if not url:
+        raise HTTPException(404, "No webcam configured")
+    client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None), follow_redirects=True)
+    try:
+        resp = await client.send(client.build_request("GET", url), stream=True)
+    except httpx.HTTPError as e:
+        await client.aclose()
+        raise HTTPException(502, f"Webcam unreachable: {e}")
+    if resp.status_code >= 400:
+        await resp.aclose()
+        await client.aclose()
+        raise HTTPException(502, f"Webcam returned HTTP {resp.status_code}")
+
+    async def body():
+        try:
+            async for chunk in resp.aiter_raw():
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    # "identity" keeps the gzip middleware from buffering the live stream.
+    headers = {"Cache-Control": "no-store", "Content-Encoding": "identity"}
+    return StreamingResponse(body(), media_type=resp.headers.get("content-type", "image/jpeg"), headers=headers)
+
+
+# ---- backup & integrations ----------------------------------------------------
+
+
+@app.get("/api/backup")
+async def get_backup() -> Response:
+    stamp = time.strftime("%Y%m%d-%H%M")
+    return Response(backup.create(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="printbridge-backup-{stamp}.zip"'})
+
+
+@app.post("/api/restore")
+async def post_restore(file: UploadFile = File(...)) -> dict:
+    data = await _read_upload(file, backup.MAX_RESTORE)
+    try:
+        restored = backup.restore(data)
+    except (backup.BackupError, ValidationError, ValueError) as e:
+        raise HTTPException(422, str(e))
+    state.settings = config.load_settings()
+    state.monitor.status = None
+    state.mqtt.restart()
+    return {"restored": restored}
+
+
+@app.get("/api/mqtt/status")
+async def mqtt_status() -> dict:
+    cfg = state.settings.mqtt
+    return {"enabled": cfg.enabled, "connected": state.mqtt.connected, "error": state.mqtt.last_error}
+
+
 # ---- printer --------------------------------------------------------------
 
 
@@ -488,7 +795,8 @@ async def printer_status() -> dict:
         light = make_host(state.settings.printer).supports_light if state.settings.printer.url else False
     except PrinterError:
         light = False
-    return {**st.model_dump(), "supports_light": light}
+    return {**st.model_dump(), "supports_light": light, "babystep_total": state.monitor.babystep_total,
+            "webcam": bool(state.settings.webcam_url)}
 
 
 class ControlRequest(BaseModel):
@@ -506,10 +814,11 @@ async def printer_control(req: ControlRequest) -> dict:
 
 
 class CommandRequest(BaseModel):
-    command: Literal["preheat", "cooldown", "home", "fan_on", "fan_off", "light_on", "light_off", "gcode"]
+    command: Literal["preheat", "cooldown", "home", "fan_on", "fan_off", "light_on", "light_off", "gcode", "babystep"]
     nozzle: int = Field(0, ge=0, le=260)
     bed: int = Field(0, ge=0, le=100)
     gcode: str = Field("", max_length=500)
+    z: float = Field(0, ge=-0.5, le=0.5, description="Live Z adjustment in mm for babystep")
 
 
 # Commands that would interfere with a running print.
@@ -524,6 +833,13 @@ async def printer_command(req: CommandRequest) -> dict:
         if st.state in ACTIVE:
             raise HTTPException(409, "Not available while the printer is printing")
     try:
+        if req.command == "babystep":
+            if not req.z:
+                raise HTTPException(422, "Enter a non-zero Z adjustment")
+            # M290 babysteps Z during a print; positive moves the nozzle away from the bed.
+            await h.send_gcode([f"M290 Z{req.z:+.3f}"])
+            state.monitor.babystep_total = round(state.monitor.babystep_total + req.z, 3)
+            return {"ok": True, "babystep_total": state.monitor.babystep_total}
         if req.command == "gcode":
             lines = [ln.strip() for ln in req.gcode.replace(";", "\n").splitlines() if ln.strip()]
             if not lines:

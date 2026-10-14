@@ -128,6 +128,19 @@ def save_override(kind: Kind, name: str, text: str) -> Path:
     return path
 
 
+def set_values(kind: Kind, name: str, values: dict[str, str]) -> Path:
+    """Change or add keys in a profile, keeping everything else (and comments) as they are."""
+    lines = resolve(kind, name).read_text(errors="replace").splitlines()
+    pending = dict(values)
+    for i, line in enumerate(lines):
+        if "=" in line and not line.lstrip().startswith(("#", ";")):
+            key = line.partition("=")[0].strip()
+            if key in pending:
+                lines[i] = f"{key} = {pending.pop(key)}"
+    lines += [f"{k} = {v}" for k, v in pending.items()]
+    return save_override(kind, name, "\n".join(lines))
+
+
 def remove_override(kind: Kind, name: str) -> None:
     override_path(kind, name).unlink(missing_ok=True)
 
