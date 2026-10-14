@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintBridge</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='22' width='24' height='4' rx='1' fill='%23f97316'/><path d='M12 4h8v6l-4 5-4-5z' fill='%23f97316'/></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="22" width="24" height="4" rx="1"/><path d="M12 4h8v6l-4 5-4-5z"/></svg>
+      <div>
+        <h1>PrintBridge</h1>
+        <p>Creality Ender-3 V3 SE</p>
+      </div>
+    </div>
+    <button class="ghost" id="open-settings" type="button">Settings</button>
+  </header>
+
+  <main>
+    <section class="card" id="printer">
+      <div class="card-head">
+        <h2>Printer</h2>
+        <span class="pill" id="printer-state">…</span>
+      </div>
+      <div class="temps">
+        <div><span class="label">Nozzle</span><span class="value" id="t-nozzle">—</span></div>
+        <div><span class="label">Bed</span><span class="value" id="t-bed">—</span></div>
+      </div>
+      <div id="print-progress" hidden>
+        <div class="file-line"><span id="p-file"></span><span id="p-pct"></span></div>
+        <div class="bar"><div id="p-bar"></div></div>
+        <div class="muted small" id="p-time"></div>
+        <div class="row gap">
+          <button type="button" data-ctl="pause">Pause</button>
+          <button type="button" data-ctl="resume">Resume</button>
+          <button type="button" class="danger" data-ctl="cancel">Cancel</button>
+        </div>
+      </div>
+      <p class="muted small" id="printer-msg"></p>
+    </section>
+
+    <section class="card" id="upload">
+      <h2>New print</h2>
+      <form id="upload-form">
+        <label class="drop" id="drop">
+          <input type="file" id="file" accept=".3mf,.stl,.obj,.gcode" required>
+          <span class="drop-title" id="drop-title">Drop a 3MF, STL or OBJ here</span>
+          <span class="muted small">or click to choose · G-code files skip slicing</span>
+        </label>
+
+        <div class="grid">
+          <label>Quality<select name="quality" id="quality"></select></label>
+          <label>Material<select name="material" id="material"></select></label>
+          <label>Infill <output id="infill-out">15%</output>
+            <input type="range" name="infill" id="infill" min="0" max="100" step="5" value="15">
+          </label>
+          <label>Supports
+            <select name="supports">
+              <option value="none">None</option>
+              <option value="buildplate">Touching build plate</option>
+              <option value="everywhere">Everywhere</option>
+            </select>
+          </label>
+          <label>Brim width (mm)<input type="number" name="brim" min="0" max="20" step="1" value="0"></label>
+          <label>Nozzle °C<input type="number" name="nozzle_temp" min="150" max="260" placeholder="material default"></label>
+          <label>Bed °C<input type="number" name="bed_temp" min="0" max="100" placeholder="material default"></label>
+        </div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" name="arrange" checked> Arrange &amp; center on bed</label>
+          <label class="check"><input type="checkbox" name="probe_bed"> Probe a fresh bed mesh (G29) before printing</label>
+        </div>
+        <button type="submit" class="primary" id="upload-btn">Upload &amp; slice</button>
+        <p class="error" id="upload-err" role="alert"></p>
+      </form>
+    </section>
+
+    <section class="card wide" id="jobs-card">
+      <div class="card-head">
+        <h2>Jobs</h2>
+        <span class="muted small" id="slicer-warning"></span>
+      </div>
+      <ul id="jobs" class="jobs"></ul>
+      <p class="muted empty" id="jobs-empty">No jobs yet. Upload a model to get started.</p>
+    </section>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Settings</h2>
+      <fieldset>
+        <legend>Print host</legend>
+        <p class="muted small">The Ender-3 V3 SE has no network port of its own. Connect it by USB to a host running OctoPrint or Klipper (Moonraker) and point PrintBridge at that host.</p>
+        <label>Type
+          <select name="kind">
+            <option value="octoprint">OctoPrint</option>
+            <option value="moonraker">Moonraker (Klipper)</option>
+          </select>
+        </label>
+        <label>URL<input name="url" type="url" placeholder="http://octopi.local"></label>
+        <label>API key<input name="api_key" type="password" autocomplete="off" placeholder="Required for OctoPrint"></label>
+        <label class="check"><input type="checkbox" name="verify_tls" checked> Verify TLS certificates</label>
+      </fieldset>
+      <fieldset>
+        <legend>Slicer</legend>
+        <label>PrusaSlicer executable<input name="slicer_path" placeholder="auto-detect"></label>
+        <label>Slice timeout (seconds)<input name="slice_timeout" type="number" min="30" max="7200"></label>
+      </fieldset>
+      <p class="error" id="settings-err" role="alert"></p>
+      <div class="row gap end">
+        <button value="cancel" type="button" class="ghost" id="settings-cancel">Cancel</button>
+        <button value="save" class="primary" id="settings-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="job-tpl">
+    <li class="job">
+      <div class="job-main">
+        <div class="job-title"><strong class="job-name"></strong><span class="pill job-state"></span></div>
+        <div class="muted small job-meta"></div>
+        <div class="error small job-error"></div>
+      </div>
+      <div class="job-actions row gap">
+        <a class="button ghost" data-act="download" download>G-code</a>
+        <button type="button" class="ghost" data-act="reslice" title="Slice again using the settings in New print">Re-slice</button>
+        <button type="button" data-act="upload">Upload only</button>
+        <button type="button" class="primary" data-act="print">Print</button>
+        <button type="button" class="ghost" data-act="delete" aria-label="Delete job">✕</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

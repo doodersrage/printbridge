@@ -1,0 +1,15 @@
+services:
+  printbridge:
+    build: .
+    image: printbridge:latest
+    container_name: printbridge
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      # Optional first-run defaults; can be changed later in the web UI (Settings).
+      PRINTBRIDGE_PRINTER_KIND: ${PRINTBRIDGE_PRINTER_KIND:-octoprint}
+      PRINTBRIDGE_PRINTER_URL: ${PRINTBRIDGE_PRINTER_URL:-}
+      PRINTBRIDGE_PRINTER_API_KEY: ${PRINTBRIDGE_PRINTER_API_KEY:-}
