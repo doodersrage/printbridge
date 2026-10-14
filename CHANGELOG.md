@@ -10,6 +10,7 @@ releases may include breaking changes.
 - Daily automatic backups in the data volume, keeping the last 7 by default and downloadable from Settings → Backup.
 
 ### Changed
+- Browser tests (`tests/e2e`) run in CI against the Docker image before publishing.
 - Internal restructure: the API is split into route modules and the frontend into smaller scripts. Behaviour is unchanged.
 
 ### Security

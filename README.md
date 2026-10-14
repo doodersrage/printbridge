@@ -210,6 +210,12 @@ screen: in Safari use Share → Add to Home Screen, and in Chrome use ⋮ → Ad
 Home screen. Full standalone installation in Chrome needs HTTPS (a reverse
 proxy). Over plain `http://` on your LAN it is added as a shortcut.
 
+## Releasing
+
+1. Update `version` in `pyproject.toml`, run `uv lock`, and add a section to `CHANGELOG.md`.
+2. Commit the changes, then tag and push: `git tag -a v0.2.0 -m "PrintBridge 0.2.0" && git push origin main v0.2.0`.
+3. CI publishes the `0.2.0` and `0.2` image tags.
+
 ## Local development
 
 You need [uv](https://docs.astral.sh/uv/) and PrusaSlicer (`apt install prusa-slicer`).
@@ -225,6 +231,20 @@ uv run pytest
 | `PRINTBRIDGE_DATA` | `./data` | settings + job storage |
 | `PRINTBRIDGE_SLICER` | auto-detect | path to the PrusaSlicer executable |
 | `PRINTBRIDGE_HOST` / `PRINTBRIDGE_PORT` | `0.0.0.0` / `8000` | listen address |
+
+### Browser tests
+
+`tests/e2e` drives a real Chromium against PrintBridge with a real PrusaSlicer,
+a mock OctoPrint, a local SMTP server and a file server. It covers slicing and
+previews, multi-plate and wrong-printer 3MFs, imports, combining, calibration,
+spools, email and backup. It is skipped unless enabled:
+
+```bash
+uv run --with playwright playwright install chromium
+PRINTBRIDGE_E2E=1 PRINTBRIDGE_SLICER=$(which prusa-slicer) uv run --with playwright pytest tests/e2e
+```
+
+CI runs it against the built Docker image before anything is published.
 
 ## Login
 
