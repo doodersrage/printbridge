@@ -1,6 +1,7 @@
 .venv
 .git
 data
-tests
+tests/test_*.py
+tests/conftest.py
 **/__pycache__
 .pytest_cache

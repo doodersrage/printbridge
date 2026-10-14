@@ -28,16 +28,31 @@ cancel the print. It also shows nozzle and bed temperatures and print progress.
   TCP **81** (HTTP) and **21** (FTP, passive mode).
 - Creality has never published this API, so a future box firmware update could change it.
 
-## Run with Docker (Debian 13)
+## Install with Docker (Debian 13)
+
+A ready-made image is published to GitHub's container registry for
+`linux/amd64` and `linux/arm64` on every push to `main`:
+`ghcr.io/doodersrage/printbridge:latest`.
+
+You only need the compose file, not the whole repo:
 
 ```bash
-git clone https://github.com/doodersrage/printbridge.git
-cd printbridge
-docker compose up -d --build
+mkdir printbridge && cd printbridge
+curl -fsSLO https://raw.githubusercontent.com/doodersrage/printbridge/main/docker-compose.yml
+docker compose up -d
 ```
 
 Then open `http://<server>:8000` and enter your Wi-Fi Box's IP under **Settings**.
-Settings and jobs are kept in `./data`.
+Settings and jobs are kept in the `printbridge-data` Docker volume.
+
+To update to the latest version:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+To build the image yourself, clone the repo and replace the `image:` line in
+`docker-compose.yml` with `build: .`.
 
 The image is built on `debian:trixie-slim` and installs PrusaSlicer from the
 Debian archive. You can also set the first-run defaults with environment
