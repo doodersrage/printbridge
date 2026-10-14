@@ -1,6 +1,6 @@
 [project]
 name = "printbridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Web app that slices 3MF files for a Creality Ender-3 V3 SE and sends them to OctoPrint or Moonraker"
 authors = [
     { name = "Robert McDowell", email = "doodersrage@gmail.com" }

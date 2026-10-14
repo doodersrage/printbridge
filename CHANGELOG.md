@@ -4,7 +4,7 @@ All notable changes to PrintBridge are listed here. Versions follow
 [Semantic Versioning](https://semver.org/); while the version is 0.x, minor
 releases may include breaking changes.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-14
 
 ### Added
 - **Watch folder**: model files and zips saved into a mounted folder are imported and sliced automatically, using an optional preset. Partial downloads are ignored.
@@ -84,5 +84,6 @@ The first versioned release.
 - Docker image for `linux/amd64` and `linux/arm64`, published to `ghcr.io/doodersrage/printbridge`.
 - Before the image is published, CI runs the tests and slices a test model inside the container.
 
+[0.3.0]: https://github.com/doodersrage/printbridge/releases/tag/v0.3.0
 [0.2.0]: https://github.com/doodersrage/printbridge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/doodersrage/printbridge/releases/tag/v0.1.0

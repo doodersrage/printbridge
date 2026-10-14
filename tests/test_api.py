@@ -8,7 +8,7 @@ async def test_healthz_reports_version(client):
     from printbridge import __version__
 
     r = (await client.get("/healthz")).json()
-    assert r == {"ok": True, "version": __version__} and __version__ == "0.2.0"
+    assert r == {"ok": True, "version": __version__} and __version__ == "0.3.0"
 
 
 async def test_index_served(client):

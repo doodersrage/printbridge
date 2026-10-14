@@ -58,11 +58,11 @@ Each release is published with matching image tags, and `latest` follows `main`:
 | Tag | Tracks |
 | --- | --- |
 | `latest` | every push to `main` |
-| `0.2` | the newest 0.2.x release |
-| `0.2.0` | exactly that release |
+| `0.3` | the newest 0.3.x release |
+| `0.3.0` | exactly that release |
 
 To stay on a release line instead of following `main`, set the image in
-`docker-compose.yml` to `ghcr.io/doodersrage/printbridge:0.2`. The running
+`docker-compose.yml` to `ghcr.io/doodersrage/printbridge:0.3`. The running
 version is shown next to the printer name in the header. See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
@@ -237,8 +237,8 @@ proxy). Over plain `http://` on your LAN it is added as a shortcut.
 ## Releasing
 
 1. Update `version` in `pyproject.toml`, run `uv lock`, and add a section to `CHANGELOG.md`.
-2. Commit the changes, then tag and push: `git tag -a v0.2.0 -m "PrintBridge 0.2.0" && git push origin main v0.2.0`.
-3. CI publishes the `0.2.0` and `0.2` image tags.
+2. Commit the changes, then tag and push: `git tag -a v0.4.0 -m "PrintBridge 0.4.0" && git push origin main v0.4.0`.
+3. CI publishes the `0.4.0` and `0.4` image tags.
 
 ## Local development
 
