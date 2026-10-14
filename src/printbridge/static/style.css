@@ -14,6 +14,10 @@
   --bad: #b91c1c;
   --bad-soft: #fdeceb;
   --radius: 10px;
+  --viewer-bg: #eceae4;
+  --bed: #3a3a38;
+  --grid: #9a9890;
+  --grid-major: #c9c7bf;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -32,6 +36,10 @@
     --warn-soft: #3a3215;
     --bad: #f87171;
     --bad-soft: #3b1a1a;
+    --viewer-bg: #10100f;
+    --bed: #262624;
+    --grid: #4a4945;
+    --grid-major: #6a6964;
     color-scheme: dark;
   }
 }
@@ -157,3 +165,13 @@ fieldset p { margin: 0; }
 .login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 0.9rem; }
 .login-card .brand { margin-bottom: 0.4rem; }
 .login-card button { justify-content: center; padding: 0.55rem; }
+
+dialog.viewer { width: min(1000px, calc(100vw - 2rem)); padding: 0; overflow: hidden; }
+.viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.8rem 1rem; }
+.viewer-title { min-width: 0; display: flex; flex-direction: column; }
+.viewer-title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-title .error { margin: 0; }
+.viewer-stage { position: relative; height: min(68vh, 620px); background: var(--viewer-bg); }
+.viewer-stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.viewer-status { position: absolute; inset: 0; margin: 0; display: grid; place-items: center; text-align: center; padding: 1rem; white-space: pre-wrap; color: var(--muted); pointer-events: none; }
+.viewer-help { margin: 0; padding: 0.6rem 1rem 0.8rem; }

@@ -79,45 +79,69 @@ def build_command(slicer: str, model: Path, output: Path, printer_ini: Path, opt
         cmd += ["--temperature", str(opts.nozzle_temp), "--first-layer-temperature", str(opts.nozzle_temp)]
     if opts.bed_temp is not None:
         cmd += ["--bed-temperature", str(opts.bed_temp), "--first-layer-bed-temperature", str(opts.bed_temp)]
-    if opts.arrange:
-        cmd += ["--center", f"{BED_CENTER[0]},{BED_CENTER[1]}"]
-    else:
-        cmd += ["--dont-arrange"]
+    cmd += placement_args(opts)
     cmd += ["--output", str(output), str(model)]
     return cmd
 
 
-async def slice_model(slicer: str, model: Path, output: Path, opts: SliceOptions, timeout: int = 900) -> SliceResult:
+def placement_args(opts: SliceOptions) -> list[str]:
+    if opts.arrange:
+        return ["--center", f"{BED_CENTER[0]},{BED_CENTER[1]}"]
+    return ["--dont-arrange"]
+
+
+def headless_env() -> dict[str, str]:
+    # PrusaSlicer is a GUI app; make sure the CLI never tries to open a display.
+    env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
+    env.pop("DISPLAY", None)
+    env.pop("WAYLAND_DISPLAY", None)
+    return env
+
+
+async def _run(cmd: list[str], timeout: int) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=headless_env()
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise SlicerError(f"PrusaSlicer timed out after {timeout}s")
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+def _check_slicer(slicer: str) -> None:
     if not slicer:
         raise SlicerError("PrusaSlicer was not found. Install it or set the slicer path in Settings.")
     if not (Path(slicer).is_file() or shutil.which(slicer)):
         raise SlicerError(f"Slicer executable not found: {slicer}")
 
+
+def _failure(code: int, log: str) -> SlicerError:
+    tail = "\n".join(log.strip().splitlines()[-15:])
+    suffix = f" (exit code {code})" if code else ""
+    return SlicerError(f"PrusaSlicer could not process this model{suffix}:\n{tail}")
+
+
+async def export_preview(slicer: str, model: Path, output: Path, opts: SliceOptions, timeout: int = 120) -> Path:
+    """Export the model as one binary STL, positioned on the bed exactly as it will be sliced."""
+    _check_slicer(slicer)
+    output.unlink(missing_ok=True)
+    cmd = [slicer, "--export-stl", "--loglevel", "2", *placement_args(opts), "--output", str(output), str(model)]
+    code, log = await _run(cmd, timeout)
+    if code != 0 or not output.exists():
+        raise _failure(code, log)
+    return output
+
+
+async def slice_model(slicer: str, model: Path, output: Path, opts: SliceOptions, timeout: int = 900) -> SliceResult:
+    _check_slicer(slicer)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="printbridge-") as tmp:
         printer_ini = Path(tmp) / "printer.ini"
         printer_ini.write_text(printer_profile_text(opts.probe_bed))
-        cmd = build_command(slicer, model, output, printer_ini, opts)
-        # PrusaSlicer is a GUI app; make sure the CLI never tries to open a display.
-        env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
-        env.pop("DISPLAY", None)
-        env.pop("WAYLAND_DISPLAY", None)
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
-        )
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise SlicerError(f"Slicing timed out after {timeout}s")
-
-    log = out.decode(errors="replace")
-    if proc.returncode != 0 or not output.exists():
-        tail = "\n".join(log.strip().splitlines()[-15:])
-        code = f" (exit code {proc.returncode})" if proc.returncode else ""
-        raise SlicerError(f"PrusaSlicer could not slice this model{code}:\n{tail}")
+        code, log = await _run(build_command(slicer, model, output, printer_ini, opts), timeout)
+    if code != 0 or not output.exists():
+        raise _failure(code, log)
     return SliceResult(gcode_path=output, log=log)

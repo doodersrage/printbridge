@@ -118,3 +118,25 @@ async def test_reslice_rejects_gcode_jobs(client, sample_gcode):
     job = (await client.post("/api/jobs", files={"file": ("p.gcode", sample_gcode.read_bytes())})).json()
     r = await client.post(f"/api/jobs/{job['id']}/reslice", json={})
     assert r.status_code == 400
+
+
+async def test_model_preview(client):
+    job = (await client.post("/api/jobs", files={"file": ("cube.3mf", b"PK model")})).json()
+    await wait_for(client, job["id"], "ready")
+    r = await client.get(f"/api/jobs/{job['id']}/preview.stl")
+    assert r.status_code == 200 and r.headers["content-type"] == "model/stl"
+    # Cached after the first request, and cleared when the job is re-sliced.
+    path = client.main.state.jobs.preview_path(client.main.state.jobs.get(job["id"]))
+    assert path.exists()
+    await client.post(f"/api/jobs/{job['id']}/reslice", json={"arrange": False})
+    await wait_for(client, job["id"], "ready")
+    assert not path.exists()
+
+
+async def test_model_preview_errors(client, sample_gcode):
+    g = (await client.post("/api/jobs", files={"file": ("p.gcode", sample_gcode.read_bytes())})).json()
+    assert (await client.get(f"/api/jobs/{g['id']}/preview.stl")).status_code == 404
+    bad = (await client.post("/api/jobs", files={"file": ("bad.3mf", b"FAIL")})).json()
+    await wait_for(client, bad["id"], "failed")
+    r = await client.get(f"/api/jobs/{bad['id']}/preview.stl")
+    assert r.status_code == 422 and "outside of the print volume" in r.json()["detail"]

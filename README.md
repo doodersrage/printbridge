@@ -77,6 +77,12 @@ retraction, Marlin 2 G-code and the Creality-style purge line. It ships with:
 - **Progress:** the G-code includes `M73` progress and remaining-time updates, so the Wi-Fi Box, the printer screen and PrintBridge can show how far along a print is.
 - **Per-job options:** infill, supports (none, touching the build plate, or everywhere), brim, nozzle and bed temperature overrides, auto-arrange and centering, and an optional fresh `G29` bed probe. Without the probe it loads the saved mesh with `M420 S1`.
 
+Each job has a **3D view** that shows the model on a 220 × 220 mm bed with
+the same placement PrusaSlicer will use. The view is exported by PrusaSlicer
+itself, so what you see is what gets sliced. Anything outside the build volume
+turns red. three.js is bundled with the app, so the viewer works without
+internet access.
+
 Settings saved inside a 3MF from another slicer (Bambu Studio, Orca, Cura,
 PrusaSlicer) are ignored. Only the geometry is used, so the G-code always
 matches this printer. Objects placed for a different bed are re-centered on the

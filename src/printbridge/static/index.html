@@ -121,6 +121,25 @@
     </form>
   </dialog>
 
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
+    <div class="viewer-head">
+      <div class="viewer-title">
+        <h2 id="viewer-title"></h2>
+        <span class="muted small" id="viewer-info"></span>
+      </div>
+      <div class="row gap">
+        <button type="button" class="ghost" id="viewer-fit">Fit model</button>
+        <button type="button" class="ghost" id="viewer-bed">Whole bed</button>
+        <button type="button" class="ghost" id="viewer-close" aria-label="Close viewer">✕</button>
+      </div>
+    </div>
+    <div class="viewer-stage">
+      <canvas id="viewer-canvas"></canvas>
+      <p class="viewer-status" id="viewer-status"></p>
+    </div>
+    <p class="muted small viewer-help">Drag to rotate · right-drag or two fingers to pan · scroll or pinch to zoom. Placement matches the slice settings; the orange dot is the bed's front-left corner.</p>
+  </dialog>
+
   <template id="job-tpl">
     <li class="job">
       <div class="job-main">
@@ -129,6 +148,7 @@
         <div class="error small job-error"></div>
       </div>
       <div class="job-actions row gap">
+        <button type="button" class="ghost" data-act="view" title="View the 3D model on the bed">3D view</button>
         <a class="button ghost" data-act="download" download>G-code</a>
         <button type="button" class="ghost" data-act="reslice" title="Slice again using the settings in New print">Re-slice</button>
         <button type="button" data-act="upload">Upload only</button>
@@ -139,5 +159,6 @@
   </template>
 
   <script src="app.js"></script>
+  <script type="module" src="viewer.js"></script>
 </body>
 </html>

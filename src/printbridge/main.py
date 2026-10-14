@@ -17,7 +17,7 @@ from .auth import COOKIE_NAME, PUBLIC_PATHS, AuthConfig, load_auth
 from .gcode import parse_stats
 from .jobs import Job, JobStore
 from .printers import PrinterError, PrinterStatus, make_host
-from .slicer import MATERIALS, QUALITIES, SliceOptions, SlicerError, slice_model
+from .slicer import MATERIALS, QUALITIES, SliceOptions, SlicerError, export_preview, slice_model
 
 ACCEPTED = {".3mf", ".stl", ".obj", ".gcode"}
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -30,6 +30,7 @@ class State:
     jobs: JobStore
     # PrusaSlicer is memory hungry; slice one model at a time.
     slice_lock: asyncio.Lock
+    preview_lock: asyncio.Lock
     tasks: set[asyncio.Task]
 
 
@@ -42,6 +43,7 @@ async def lifespan(_: FastAPI):
     state.auth = load_auth(config.DATA_DIR)
     state.jobs = JobStore(config.DATA_DIR / "jobs")
     state.slice_lock = asyncio.Lock()
+    state.preview_lock = asyncio.Lock()
     state.tasks = set()
     yield
     for t in state.tasks:
@@ -147,6 +149,8 @@ async def run_slice(job: Job) -> None:
     jobs = state.jobs
     async with state.slice_lock:
         jobs.update(job, state="slicing", error=None)
+        # Placement options may have changed; the preview is regenerated on demand.
+        jobs.preview_path(job).unlink(missing_ok=True)
         out = jobs.gcode_path(job)
         try:
             await slice_model(
@@ -263,6 +267,22 @@ async def download_gcode(job_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "G-code not available")
     return FileResponse(path, media_type="text/x-gcode", filename=job.gcode_name)
+
+
+@app.get("/api/jobs/{job_id}/preview.stl")
+async def model_preview(job_id: str) -> FileResponse:
+    job = require_job(job_id)
+    if job.options is None:
+        raise HTTPException(404, "No 3D model for uploaded G-code")
+    path = state.jobs.preview_path(job)
+    if not path.exists():
+        async with state.preview_lock:
+            if not path.exists():
+                try:
+                    await export_preview(state.settings.slicer_path, state.jobs.source_path(job), path, job.options)
+                except SlicerError as e:
+                    raise HTTPException(422, str(e))
+    return FileResponse(path, media_type="model/stl", filename=f"{job.name}.stl")
 
 
 class SendRequest(BaseModel):

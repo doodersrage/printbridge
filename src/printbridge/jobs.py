@@ -60,6 +60,9 @@ class JobStore:
     def gcode_path(self, job: Job) -> Path:
         return self.dir(job) / job.gcode_name
 
+    def preview_path(self, job: Job) -> Path:
+        return self.dir(job) / "preview.stl"
+
     def create(self, filename: str, options: SliceOptions | None) -> Job:
         ext = Path(filename).suffix.lower()
         job = Job(

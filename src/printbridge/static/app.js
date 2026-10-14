@@ -122,6 +122,7 @@ function renderJobs(jobs) {
     const busy = ["queued", "slicing", "sending"].includes(job.state);
     $('[data-act="delete"]', li).disabled = busy;
     if (!job.options || busy) $('[data-act="reslice"]', li).remove();
+    if (!job.options) $('[data-act="view"]', li).remove();
     list.append(li);
   }
 }
@@ -136,6 +137,10 @@ $("#jobs").addEventListener("click", async (ev) => {
   const id = btn.closest(".job").dataset.id;
   const job = jobsCache.find((j) => j.id === id);
   const act = btn.dataset.act;
+  if (act === "view") {
+    window.PrintBridgeViewer?.open(job);
+    return;
+  }
   try {
     if (act === "reslice") {
       await api(`/api/jobs/${id}/reslice`, {

@@ -70,3 +70,20 @@ async def test_slice_model_reports_failure(fake_slicer, tmp_path):
 async def test_slice_model_missing_slicer(tmp_path):
     with pytest.raises(SlicerError, match="not found"):
         await slice_model("", tmp_path / "m.3mf", tmp_path / "o.gcode", SliceOptions())
+
+
+async def test_export_preview_uses_same_placement(tmp_path, monkeypatch):
+    from printbridge import slicer as slicer_mod
+
+    seen = {}
+
+    async def fake_run(cmd, timeout):
+        seen["cmd"] = cmd
+        Path(cmd[cmd.index("--output") + 1]).write_bytes(b"solid")
+        return 0, ""
+
+    monkeypatch.setattr(slicer_mod, "_run", fake_run)
+    monkeypatch.setattr(slicer_mod, "_check_slicer", lambda s: None)
+    out = await slicer_mod.export_preview("ps", tmp_path / "m.3mf", tmp_path / "p.stl", SliceOptions(arrange=False))
+    assert out.exists()
+    assert seen["cmd"][:2] == ["ps", "--export-stl"] and "--dont-arrange" in seen["cmd"]
