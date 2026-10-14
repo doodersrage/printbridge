@@ -4,7 +4,7 @@ All notable changes to PrintBridge are listed here. Versions follow
 [Semantic Versioning](https://semver.org/); while the version is 0.x, minor
 releases may include breaking changes.
 
-## [Unreleased]
+## [0.2.0] - 2026-10-14
 
 ### Added
 - **Email notifications** over SMTP (STARTTLS, SSL or plain), with a picture of the model on finished and stopped prints.
@@ -22,6 +22,13 @@ releases may include breaking changes.
 - **Detection of 3MFs made for another printer**: shows the target printer and bed, any scale factor and the units stored in the file, with **Use original size** to undo a stored scale.
 - **Spool tracking**: remaining filament on the loaded spool, deducted after each print, with a warning before printing if it won't be enough or the material differs.
 - **Resize by dimensions** in the 3D view, and the printed size (W × D × H) on every job.
+
+### Fixed
+- The Wi-Fi Box's `err` field is no longer reported as a printer error. It reads 1 during every normal print, which showed "Printer reported error 1" and could trigger false error notifications.
+- The Light button shows the box's real light state.
+
+### Verified on hardware
+Tested on a Creality Wi-Fi Box 2.0 (firmware V3.04b06) with an Ender-3 V3 SE: status, preheat and cool down, home, light on/off, FTP upload and delete, and finish detection (state 1 → 2 with progress at 100%). Live Z during a print has not been tested on hardware yet.
 
 ## [0.1.0] - 2026-10-14
 
@@ -53,4 +60,5 @@ The first versioned release.
 - Docker image for `linux/amd64` and `linux/arm64`, published to `ghcr.io/doodersrage/printbridge`.
 - Before the image is published, CI runs the tests and slices a test model inside the container.
 
+[0.2.0]: https://github.com/doodersrage/printbridge/releases/tag/v0.2.0
 [0.1.0]: https://github.com/doodersrage/printbridge/releases/tag/v0.1.0

@@ -58,11 +58,11 @@ Each release is published with matching image tags, and `latest` follows `main`:
 | Tag | Tracks |
 | --- | --- |
 | `latest` | every push to `main` |
-| `0.1` | the newest 0.1.x release |
-| `0.1.0` | exactly that release |
+| `0.2` | the newest 0.2.x release |
+| `0.2.0` | exactly that release |
 
 To stay on a release line instead of following `main`, set the image in
-`docker-compose.yml` to `ghcr.io/doodersrage/printbridge:0.1`. The running
+`docker-compose.yml` to `ghcr.io/doodersrage/printbridge:0.2`. The running
 version is shown next to the printer name in the header. See
 [CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
