@@ -14,7 +14,7 @@ import zipfile
 
 from . import config, presets, profiles
 
-FILES = ("config.json", "presets.json", "history.jsonl")
+FILES = ("config.json", "presets.json", "history.jsonl", "spools.json")
 MAX_RESTORE = 20 * 1024 * 1024
 
 
@@ -59,6 +59,10 @@ def restore(blob: bytes) -> list[str]:
             presets._ADAPTER.validate_json(data)
         elif name == "history.jsonl":
             pass
+        elif name == "spools.json":
+            from . import spools
+
+            spools._ADAPTER.validate_json(data)
         elif name.startswith("profiles/") and name.endswith(".ini"):
             parts = name.split("/")[1:]
             if parts == ["printer.ini"]:

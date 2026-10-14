@@ -13,7 +13,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from . import history, notify
+from . import history, notify, spools
 from .config import Settings
 from .jobs import Job, JobStore
 from .printers import PrinterError, PrinterStatus, make_host
@@ -149,6 +149,10 @@ class Monitor:
         duration = prev.elapsed or ((now - self._started_at) if self._started_at else None)
         details = self._job_details(job, 1.0 if done else progress / 100)
         details["duration"] = fmt_duration(duration)
+        spool = spools.consume(details.get("filament_g") or 0)
+        if spool:
+            left = f"{spool.remaining_g:.0f} g left on {spool.name}"
+            details["spool"] = left + (" — running low" if spool.remaining_g < spools.LOW_GRAMS else "")
 
         history.append(history.PrintRecord(
             job_id=job.id if job else None,
@@ -163,6 +167,7 @@ class Monitor:
             progress=100.0 if done else round(progress, 1),
             filament_g=details.get("filament_g"),
             cost=details.get("cost_value"),
+            spool=spool.name if spool else None,
         ))
 
         if done:

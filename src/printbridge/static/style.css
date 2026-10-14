@@ -291,3 +291,18 @@ details.sub[open] summary { margin-bottom: 0.5rem; }
 .resize-bar[hidden] { display: none; }
 .resize-bar label { flex-direction: row; align-items: center; gap: 0.3rem; }
 .resize-bar input { width: 5.5rem; padding: 0.3rem 0.4rem; }
+
+.spool-line { display: flex; align-items: center; gap: 0.6rem; margin: -0.2rem 0 0.8rem; flex-wrap: wrap; }
+.spool-text { flex: 1 1 180px; min-width: 0; }
+.spool-text .small { overflow-wrap: anywhere; }
+.spool-bar { flex: 0 0 80px; margin: 0; height: 6px; }
+.spool-bar.low > div { background: var(--bad); }
+.spool-list { list-style: none; margin: 0.6rem 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.spool-item { display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.7rem; }
+.spool-item.loaded { border-color: var(--accent); }
+.spool-main { display: flex; flex-direction: column; gap: 0.2rem; flex: 1 1 220px; min-width: 0; }
+.spool-main strong .pill { margin-left: 0.4rem; font-size: 0.7rem; }
+.spool-main .spool-bar { width: 100%; flex: none; }
+.spool-add h3 { font-size: 0.9rem; margin: 0 0 0.5rem; }
+.spool-add .row { margin-top: 0.7rem; }

@@ -40,7 +40,7 @@ def build_email(cfg: NotifyConfig, event: str, message: str, extra: dict, image:
 
     lines = [message, ""]
     for label, key in (("File", "file"), ("Print time", "duration"), ("Filament", "filament"),
-                       ("Cost", "cost"), ("Printer", "printer_state")):
+                       ("Cost", "cost"), ("Spool", "spool"), ("Printer", "printer_state")):
         if extra.get(key):
             lines.append(f"{label}: {extra[key]}")
     if extra.get("url"):

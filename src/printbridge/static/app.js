@@ -21,13 +21,18 @@ async function api(path, opts = {}) {
   }
   if (!res.ok) {
     let detail = res.statusText;
+    let code;
     try {
       const body = await res.json();
+      if (body.detail && typeof body.detail === "object" && !Array.isArray(body.detail)) {
+        code = body.detail.code;
+        body.detail = body.detail.message;
+      }
       detail = typeof body.detail === "string" ? body.detail
         : Array.isArray(body.detail) ? body.detail.map((d) => `${d.loc?.slice(-1)[0] ?? ""}: ${d.msg}`).join("; ")
         : JSON.stringify(body.detail);
     } catch { /* non-JSON error */ }
-    throw new Error(detail);
+    throw Object.assign(new Error(detail), { code });
   }
   return res.status === 204 ? null : res.json();
 }
@@ -85,6 +90,7 @@ async function refreshPrinter() {
     $('[data-ctl="resume"]').disabled = !paused;
   }
 
+  renderSpoolLine(s.spool);
   $("#babystep").hidden = !isPrinting();
   const bt = s.babystep_total || 0;
   $("#babystep-total").textContent = `${bt > 0 ? "+" : bt < 0 ? "−" : "±"}${Math.abs(bt).toFixed(2)} mm`;
@@ -147,6 +153,99 @@ $$("#babystep [data-z]").forEach((btn) => {
     btn.disabled = false;
   });
 });
+
+/* spools */
+function renderSpoolLine(spool) {
+  const bar = $("#spool-bar");
+  if (!spool) {
+    $("#spool-text").textContent = "Not tracked";
+    bar.hidden = true;
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, (spool.remaining_g / spool.total_g) * 100));
+  $("#spool-text").textContent = `${spool.name} · ${spool.material.toUpperCase()} · ${Math.round(spool.remaining_g)} g left`;
+  bar.hidden = false;
+  bar.firstElementChild.style.width = `${pct}%`;
+  bar.classList.toggle("low", spool.remaining_g < 50);
+}
+
+const spdlg = $("#spools");
+
+async function loadSpools() {
+  const list = await api("/api/spools");
+  const ul = $("#spool-list");
+  ul.replaceChildren();
+  if (!list.length) ul.append(Object.assign(document.createElement("li"), { className: "muted small", textContent: "No spools yet." }));
+  for (const sp of list) {
+    const li = document.createElement("li");
+    li.className = "spool-item" + (sp.loaded ? " loaded" : "");
+    const main = document.createElement("div");
+    main.className = "spool-main";
+    const title = Object.assign(document.createElement("strong"), { textContent: sp.name });
+    if (sp.loaded) title.append(Object.assign(document.createElement("span"), { className: "pill ok", textContent: "loaded" }));
+    const bar = Object.assign(document.createElement("div"), { className: "bar spool-bar" + (sp.remaining_g < 50 ? " low" : "") });
+    bar.append(Object.assign(document.createElement("div"), { style: `width:${Math.min(100, (sp.remaining_g / sp.total_g) * 100)}%` }));
+    main.append(title, Object.assign(document.createElement("span"), {
+      className: "muted small", textContent: `${sp.material.toUpperCase()} · ${Math.round(sp.remaining_g)} of ${Math.round(sp.total_g)} g left`,
+    }), bar);
+    const acts = document.createElement("div");
+    acts.className = "row gap";
+    const btn = (label, fn, cls = "ghost small-btn") => {
+      const b = Object.assign(document.createElement("button"), { type: "button", className: cls, textContent: label });
+      b.addEventListener("click", async () => { try { await fn(); } catch (e) { alert(e.message); } await loadSpools(); refreshPrinter(); });
+      return b;
+    };
+    const body = (extra) => ({ name: sp.name, material: sp.material, total_g: sp.total_g, remaining_g: sp.remaining_g, loaded: sp.loaded, ...extra });
+    if (!sp.loaded) acts.append(btn("Load", () => api(`/api/spools/${sp.id}`, { method: "PUT", json: body({ loaded: true }) })));
+    acts.append(btn("Set amount…", async () => {
+      const v = prompt(`Grams of filament left on ${sp.name}:`, Math.round(sp.remaining_g));
+      if (v === null || v.trim() === "") return;
+      await api(`/api/spools/${sp.id}`, { method: "PUT", json: body({ remaining_g: Number(v) }) });
+    }));
+    acts.append(btn("Delete", async () => {
+      if (confirm(`Delete spool ${sp.name}?`)) await api(`/api/spools/${sp.id}`, { method: "DELETE" });
+    }, "ghost small-btn danger"));
+    li.append(main, acts);
+    ul.append(li);
+  }
+}
+
+$("#open-spools").addEventListener("click", () => {
+  const sel = $("#spool-material");
+  sel.replaceChildren(...Object.entries(profilesInfo?.materials ?? { pla: "PLA" }).map(([v, l]) => new Option(l.split(" —")[0], v)));
+  sel.value = $("#material").value || "pla";
+  $("#spool-err").textContent = "";
+  spdlg.showModal();
+  loadSpools();
+});
+$("#spools-close").addEventListener("click", () => spdlg.close());
+$("#spool-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api("/api/spools", { method: "POST", json: {
+      name: f.name.value.trim(), material: f.material.value, total_g: Number(f.total_g.value),
+      remaining_g: f.remaining_g.value === "" ? null : Number(f.remaining_g.value), loaded: f.loaded.checked,
+    } });
+    f.name.value = "";
+    f.remaining_g.value = "";
+    await loadSpools();
+    refreshPrinter();
+  } catch (err) { $("#spool-err").textContent = err.message; }
+});
+
+/* starting a print, with the spool check */
+async function startPrint(job) {
+  if (!confirm(`Send ${job.name} to the printer and start printing now?\nMake sure the bed is clear.`)) return false;
+  try {
+    await api(`/api/jobs/${job.id}/send`, { method: "POST", json: { start: true } });
+  } catch (e) {
+    if (e.code !== "spool") throw e;
+    if (!confirm(`${e.message}\n\nPrint anyway?`)) return false;
+    await api(`/api/jobs/${job.id}/send`, { method: "POST", json: { start: true, ignore_spool: true } });
+  }
+  return true;
+}
 
 /* webcam */
 let webcamPaused = false;
@@ -508,10 +607,10 @@ $("#jobs").addEventListener("click", async (ev) => {
     } else if (act === "delete") {
       if (!confirm(`Delete ${job.name}?`)) return;
       await api(`/api/jobs/${id}`, { method: "DELETE" });
+    } else if (act === "print") {
+      await startPrint(job);
     } else {
-      const start = act === "print";
-      if (start && !confirm(`Send ${job.name} to the printer and start printing now?\nMake sure the bed is clear.`)) return;
-      await api(`/api/jobs/${id}/send`, { method: "POST", json: { start } });
+      await api(`/api/jobs/${id}/send`, { method: "POST", json: { start: false } });
     }
   } catch (e) { alert(e.message); }
   jobsSnapshot = "";
@@ -858,10 +957,8 @@ async function loadHistory() {
     if (job && HAS_GCODE.includes(job.state)) {
       const b = Object.assign(document.createElement("button"), { type: "button", className: "ghost small-btn", textContent: "Reprint" });
       b.addEventListener("click", async () => {
-        if (!confirm(`Send ${job.name} to the printer and start printing now?\nMake sure the bed is clear.`)) return;
         try {
-          await api(`/api/jobs/${job.id}/send`, { method: "POST", json: { start: true } });
-          hdlg.close();
+          if (await startPrint(job)) hdlg.close();
         } catch (e) { alert(e.message); }
       });
       act.append(b);

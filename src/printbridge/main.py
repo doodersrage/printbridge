@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from . import __version__, backup, calibration, combine, config, history, importer, notify, presets, profiles, toolpaths
+from . import __version__, backup, calibration, combine, config, history, importer, notify, presets, profiles, spools, toolpaths
 from .auth import COOKIE_NAME, PUBLIC_PATHS, AuthConfig, load_auth
 from .gcode import parse_stats
 from .jobs import IDLE_STATES, Job, JobStore
@@ -591,6 +591,7 @@ async def job_toolpaths(job_id: str) -> FileResponse:
 class SendRequest(BaseModel):
     start: bool = True
     force: bool = Field(False, description="Start even if the printer reports it is busy")
+    ignore_spool: bool = Field(False, description="Start even if the loaded spool looks too low or is another material")
 
 
 @app.post("/api/jobs/{job_id}/send")
@@ -606,6 +607,11 @@ async def send_job(job_id: str, req: SendRequest) -> Job:
         if st.state in ACTIVE and not req.force:
             raise HTTPException(409, f"Printer is busy ({st.state.lower()} {st.file or 'a job'}). "
                                      "Wait for it to finish, or upload without starting.")
+        if not req.ignore_spool:
+            problems = spools.check(job.stats.filament_g if job.stats else None,
+                                    job.options.material if job.options else None)
+            if problems:
+                raise HTTPException(409, {"code": "spool", "message": " ".join(problems)})
     spawn(run_send(job, req.start))
     return state.jobs.update(job, state="sending")
 
@@ -780,6 +786,53 @@ async def webcam() -> Response:
     return StreamingResponse(body(), media_type=resp.headers.get("content-type", "image/jpeg"), headers=headers)
 
 
+# ---- spools -------------------------------------------------------------------
+
+
+@app.get("/api/spools")
+async def list_spools() -> list[spools.Spool]:
+    return spools.load()
+
+
+class SpoolRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    material: str = "pla"
+    total_g: float = Field(1000, gt=0, le=20000)
+    remaining_g: float | None = Field(None, ge=0, le=20000)
+    loaded: bool = False
+
+
+@app.post("/api/spools", status_code=201)
+async def add_spool(req: SpoolRequest) -> list[spools.Spool]:
+    try:
+        spool = spools.Spool(name=req.name, material=req.material, total_g=req.total_g,
+                             remaining_g=req.total_g if req.remaining_g is None else req.remaining_g)
+    except ValidationError as e:
+        raise HTTPException(422, e.errors(include_url=False))
+    return spools.upsert(spool, make_loaded=req.loaded)
+
+
+@app.put("/api/spools/{spool_id}")
+async def update_spool(spool_id: str, req: SpoolRequest) -> list[spools.Spool]:
+    current = next((s for s in spools.load() if s.id == spool_id), None)
+    if current is None:
+        raise HTTPException(404, "Spool not found")
+    try:
+        updated = current.model_copy(update={
+            "name": req.name, "material": req.material, "total_g": req.total_g,
+            "remaining_g": current.remaining_g if req.remaining_g is None else req.remaining_g,
+        })
+        spools.Spool.model_validate(updated.model_dump())
+    except ValidationError as e:
+        raise HTTPException(422, e.errors(include_url=False))
+    return spools.upsert(updated, make_loaded=req.loaded)
+
+
+@app.delete("/api/spools/{spool_id}")
+async def delete_spool(spool_id: str) -> list[spools.Spool]:
+    return spools.delete(spool_id)
+
+
 # ---- backup & integrations ----------------------------------------------------
 
 
@@ -819,8 +872,9 @@ async def printer_status() -> dict:
         light = make_host(state.settings.printer).supports_light if state.settings.printer.url else False
     except PrinterError:
         light = False
+    spool = spools.loaded()
     return {**st.model_dump(), "supports_light": light, "babystep_total": state.monitor.babystep_total,
-            "webcam": bool(state.settings.webcam_url)}
+            "webcam": bool(state.settings.webcam_url), "spool": spool.model_dump() if spool else None}
 
 
 class ControlRequest(BaseModel):

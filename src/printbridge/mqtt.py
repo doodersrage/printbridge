@@ -39,6 +39,7 @@ SENSORS = [
     ("elapsed", "Print time", "s", "duration", None, "mdi:timer-outline"),
     ("file", "Current file", None, None, None, "mdi:file-outline"),
     ("job", "Current job", None, None, None, "mdi:cube-outline"),
+    ("spool_remaining", "Spool remaining", "g", "weight", "measurement", "mdi:printer-3d-nozzle"),
 ]
 BUTTONS = [
     ("pause", "Pause print", "mdi:pause"),
@@ -71,7 +72,15 @@ def state_payload(st: PrinterStatus, job: Job | None) -> dict:
         "file": (st.file or "").rsplit("/", 1)[-1] if printing else "",
         "job": job.name if printing and job else "",
         "message": st.message or "",
+        "spool_remaining": _spool_remaining(),
     }
+
+
+def _spool_remaining() -> float | None:
+    from . import spools  # local import: spools reads the data directory at call time
+
+    spool = spools.loaded()
+    return round(spool.remaining_g) if spool else None
 
 
 def discovery_messages(cfg: MqttConfig, supports_light: bool, url: str = "") -> list[tuple[str, dict]]:

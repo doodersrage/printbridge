@@ -46,6 +46,11 @@
         <div><span class="label">Nozzle</span><span class="value" id="t-nozzle">—</span></div>
         <div><span class="label">Bed</span><span class="value" id="t-bed">—</span></div>
       </div>
+      <div class="spool-line">
+        <div class="spool-text"><span class="label">Spool</span> <span id="spool-text" class="small">Not tracked</span></div>
+        <div class="bar spool-bar" id="spool-bar" hidden><div></div></div>
+        <button type="button" class="ghost small-btn" id="open-spools">Spools…</button>
+      </div>
       <div id="print-progress" hidden>
         <div class="file-line"><span id="p-file"></span><span id="p-pct"></span></div>
         <div class="bar"><div id="p-bar"></div></div>
@@ -264,6 +269,29 @@
       </table>
     </div>
     <p class="muted small" id="history-empty" hidden>No prints recorded yet. Prints are added here when they finish or are stopped.</p>
+  </dialog>
+
+  <dialog id="spools" class="wide-dialog" aria-labelledby="spools-title">
+    <div class="dialog-head">
+      <h2 id="spools-title">Filament spools</h2>
+      <button type="button" class="ghost" id="spools-close" aria-label="Close">✕</button>
+    </div>
+    <p class="muted small">PrintBridge subtracts what each print uses from the loaded spool and warns you before a print that needs more than is left. To correct the amount, weigh the spool and subtract the empty spool's weight (often printed on its side, typically 150–250 g).</p>
+    <ul class="spool-list" id="spool-list"></ul>
+    <form class="spool-add" id="spool-form">
+      <h3>Add a spool</h3>
+      <div class="grid2">
+        <label>Name<input name="name" required maxlength="60" placeholder="e.g. Elegoo PLA black"></label>
+        <label>Material<select name="material" id="spool-material"></select></label>
+        <label>Filament weight (g)<input name="total_g" type="number" min="1" max="20000" value="1000" required></label>
+        <label>Left on it (g)<input name="remaining_g" type="number" min="0" max="20000" placeholder="full"></label>
+      </div>
+      <div class="row gap between">
+        <label class="check"><input type="checkbox" name="loaded" checked> It's loaded in the printer now</label>
+        <button type="submit" class="primary">Add spool</button>
+      </div>
+      <p class="error" id="spool-err" role="alert"></p>
+    </form>
   </dialog>
 
   <dialog id="calibrate" aria-labelledby="calibrate-title">

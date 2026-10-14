@@ -20,6 +20,7 @@ releases may include breaking changes.
 - **Backup and restore** of settings, presets, profiles and history.
 - Web app manifest and icons for adding PrintBridge to a phone's home screen.
 - **Detection of 3MFs made for another printer**: shows the target printer and bed, any scale factor and the units stored in the file, with **Use original size** to undo a stored scale.
+- **Spool tracking**: remaining filament on the loaded spool, deducted after each print, with a warning before printing if it won't be enough or the material differs.
 - **Resize by dimensions** in the 3D view, and the printed size (W × D × H) on every job.
 
 ## [0.1.0] - 2026-10-14

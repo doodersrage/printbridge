@@ -173,6 +173,11 @@ less.
   cool-down and light buttons.
 - **Webcam**: point Settings → Webcam at any MJPEG stream or JPEG snapshot URL.
   PrintBridge relays it to the Printer card.
+- **Spools** (Printer card → Spools…): add your spools, mark the loaded one,
+  and PrintBridge subtracts what each print uses. **Print** warns you first if
+  the loaded spool has too little left or is a different material from the
+  job. The remaining amount also goes into finish notifications and to Home
+  Assistant.
 - **Print history** (header → History): every finished or stopped print, with
   time, filament and cost, monthly and all-time totals, and one-click reprint.
 - **Filament prices**: set a price per kg for each material under Settings.

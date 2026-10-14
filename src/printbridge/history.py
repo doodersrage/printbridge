@@ -24,6 +24,7 @@ class PrintRecord(BaseModel):
     progress: float | None = None
     filament_g: float | None = None
     cost: float | None = None
+    spool: str | None = None
 
 
 def _path():

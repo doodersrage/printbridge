@@ -438,3 +438,67 @@ async def test_original_size_option_flow(client, tmp_path):
 def test_stl_size(tmp_path):
     p = calibration.write_stl(tmp_path / "s.stl", calibration.box(5, 5, 0, 25, 15, 7.5))
     assert combine.stl_size(p) == [20.0, 10.0, 7.5]
+
+
+# ---- spools -----------------------------------------------------------------
+
+
+async def test_spool_api_and_print_check(client, monkeypatch, fake_host, sample_gcode):
+    r = await client.post("/api/spools", json={"name": "Black PLA", "material": "pla", "total_g": 1000, "remaining_g": 3, "loaded": True})
+    assert r.status_code == 201 and r.json()[0]["loaded"] and r.json()[0]["remaining_g"] == 3
+    r = await client.post("/api/spools", json={"name": "Grey PETG", "material": "petg", "total_g": 1000})
+    petg = next(s for s in r.json() if s["name"] == "Grey PETG")
+    assert petg["remaining_g"] == 1000 and not petg["loaded"]
+
+    job = (await client.post("/api/jobs", files={"file": ("p.gcode", sample_gcode.read_bytes())})).json()  # 5.23 g
+    set_printer(client, monkeypatch, "Operational")
+    r = await client.post(f"/api/jobs/{job['id']}/send", json={"start": True})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "spool" and "3 g left" in r.json()["detail"]["message"]
+    assert (await client.post(f"/api/jobs/{job['id']}/send", json={"start": False})).status_code == 200  # upload only is fine
+    await wait_for(client, job["id"], "sent")
+    r = await client.post(f"/api/jobs/{job['id']}/send", json={"start": True, "ignore_spool": True})
+    assert r.status_code == 200
+
+    # Loading another spool unloads the first; the printer card shows it.
+    r = await client.put(f"/api/spools/{petg['id']}", json={**petg, "loaded": True})
+    assert [s["name"] for s in r.json() if s["loaded"]] == ["Grey PETG"]
+    assert (await client.get("/api/printer")).json()["spool"]["name"] == "Grey PETG"
+    assert (await client.delete(f"/api/spools/{petg['id']}")).json()[0]["name"] == "Black PLA"
+
+
+def test_spool_check_material_mismatch(tmp_path, monkeypatch):
+    from printbridge import config, spools
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    assert spools.check(500, "pla") == []  # nothing tracked
+    spools.upsert(spools.Spool(name="PETG", material="petg", remaining_g=800), make_loaded=True)
+    assert spools.check(100, "petg") == []
+    assert "sliced for PLA" in spools.check(100, "pla")[0]
+    assert spools.consume(30).remaining_g == 770
+    assert spools.consume(5000).remaining_g == 0
+
+
+async def test_finished_print_consumes_spool(tmp_path, monkeypatch):
+    from printbridge import config, spools
+    from printbridge.gcode import GcodeStats
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    spools.upsert(spools.Spool(name="Black", material="pla", remaining_g=60), make_loaded=True)
+    store = JobStore(tmp_path / "jobs")
+    job = store.create("cube.3mf", None)
+    store.update(job, state="sent", sent_at=time.time(), stats=GcodeStats(filament_g=20.0))
+    sent = []
+
+    async def fake_send(cfg, event, message, extra=None, transport=None, image=None):
+        sent.append(extra)
+        return []
+
+    monkeypatch.setattr(notify, "send", fake_send)
+    m = Monitor(lambda: Settings(), store)
+    for st in (PrinterStatus(online=True, state="Printing", file="cube.gcode", progress=5),
+               PrinterStatus(online=True, state="Complete", progress=100)):
+        m.status = st
+        await m._track(st)
+    assert spools.loaded().remaining_g == 40
+    assert sent[-1]["spool"] == "40 g left on Black — running low"
+    assert history.load()[-1].spool == "Black"
