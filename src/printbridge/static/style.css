@@ -152,3 +152,8 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0.9rem 0
 legend { padding: 0 0.3rem; font-size: 0.85rem; color: var(--muted); }
 fieldset p { margin: 0; }
 [hidden] { display: none !important; }
+
+.login-page { min-height: 100vh; display: grid; place-items: center; padding: 1rem; }
+.login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 0.9rem; }
+.login-card .brand { margin-bottom: 0.4rem; }
+.login-card button { justify-content: center; padding: 0.55rem; }

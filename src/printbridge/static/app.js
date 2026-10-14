@@ -8,6 +8,10 @@ const STATE_CLASS = {
 
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
+  if (res.status === 401) {
+    location.replace("/login");
+    throw new Error("Signed out");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -281,6 +285,17 @@ async function loadProfiles() {
   fill("#material", p.materials, p.defaults.material);
   $("#slicer-warning").textContent = p.slicer_found ? "" : "⚠ PrusaSlicer not found — set its path in Settings";
 }
+
+api("/api/auth/status").then((a) => {
+  if (!a.enabled) return;
+  const btn = $("#logout");
+  btn.hidden = false;
+  btn.title = `Signed in as ${a.username}`;
+  btn.addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    location.replace("/login");
+  });
+}).catch(() => {});
 
 loadProfiles();
 refreshPrinter();

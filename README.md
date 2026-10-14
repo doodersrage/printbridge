@@ -74,6 +74,7 @@ retraction, Marlin 2 G-code and the Creality-style purge line. It ships with:
 
 - **Quality:** Draft (0.28 mm), Standard (0.20 mm), Fine (0.12 mm)
 - **Material:** PLA, PETG, TPU
+- **Progress:** the G-code includes `M73` progress and remaining-time updates, so the Wi-Fi Box, the printer screen and PrintBridge can show how far along a print is.
 - **Per-job options:** infill, supports (none, touching the build plate, or everywhere), brim, nozzle and bed temperature overrides, auto-arrange and centering, and an optional fresh `G29` bed probe. Without the probe it loads the saved mesh with `M420 S1`.
 
 Settings saved inside a 3MF from another slicer (Bambu Studio, Orca, Cura,
@@ -102,7 +103,37 @@ uv run pytest
 | `PRINTBRIDGE_SLICER` | auto-detect | path to the PrusaSlicer executable |
 | `PRINTBRIDGE_HOST` / `PRINTBRIDGE_PORT` | `0.0.0.0` / `8000` | listen address |
 
-## Security note
+## Login
 
-PrintBridge has **no login**. Anyone who can reach it can start prints, so keep
-it on your LAN or put it behind a reverse proxy that requires authentication.
+Authentication is off by default. To turn it on, set a password, for example
+in a `.env` file next to `docker-compose.yml`:
+
+```env
+PRINTBRIDGE_USERNAME=admin
+PRINTBRIDGE_PASSWORD=choose-something-long
+```
+
+Then run `docker compose up -d` again to apply it. The browser goes to a
+sign-in page, and the session lasts 30 days (`PRINTBRIDGE_SESSION_DAYS`).
+Scripts can use HTTP Basic auth with the same credentials:
+
+```bash
+curl -u admin:choose-something-long http://<server>:8000/api/printer
+```
+
+| Variable | Purpose |
+| --- | --- |
+| `PRINTBRIDGE_USERNAME` | login name, default `admin` |
+| `PRINTBRIDGE_PASSWORD` | turns authentication on when set |
+| `PRINTBRIDGE_PASSWORD_FILE` | read the password from a file instead (Docker secrets) |
+| `PRINTBRIDGE_SESSION_DAYS` | how long a sign-in lasts, default 30 |
+| `PRINTBRIDGE_COOKIE_SECURE` | `true` when served over HTTPS |
+| `PRINTBRIDGE_SECRET_KEY` | key that signs session cookies; generated and saved in the data volume if unset |
+
+Changing the password signs everyone out. After 5 wrong passwords from one IP
+address, that address is locked out for 5 minutes. `/healthz` stays public for
+the container health check.
+
+This is a single shared login meant for a home LAN. Don't expose PrintBridge
+directly to the internet. Put it behind a VPN or a reverse proxy with HTTPS,
+and set `PRINTBRIDGE_COOKIE_SECURE=true` there.

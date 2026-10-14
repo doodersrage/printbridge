@@ -7,12 +7,13 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from . import config
+from .auth import COOKIE_NAME, PUBLIC_PATHS, AuthConfig, load_auth
 from .gcode import parse_stats
 from .jobs import Job, JobStore
 from .printers import PrinterError, PrinterStatus, make_host
@@ -25,6 +26,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 class State:
     settings: config.Settings
+    auth: AuthConfig
     jobs: JobStore
     # PrusaSlicer is memory hungry; slice one model at a time.
     slice_lock: asyncio.Lock
@@ -37,6 +39,7 @@ state = State()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     state.settings = config.load_settings()
+    state.auth = load_auth(config.DATA_DIR)
     state.jobs = JobStore(config.DATA_DIR / "jobs")
     state.slice_lock = asyncio.Lock()
     state.tasks = set()
@@ -46,6 +49,78 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="PrintBridge", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    auth = state.auth
+    path = request.url.path
+    if (
+        not auth.enabled
+        or path in PUBLIC_PATHS
+        or auth.check_session(request.cookies.get(COOKIE_NAME))
+        or auth.check_basic(request.headers.get("authorization"))
+    ):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+# ---- auth -----------------------------------------------------------------
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return {"ok": True}
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page() -> Response:
+    if not state.auth.enabled:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(STATIC_DIR / "login.html")
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, request: Request) -> Response:
+    auth = state.auth
+    if not auth.enabled:
+        return JSONResponse({"ok": True})
+    client = request.client.host if request.client else "unknown"
+    if wait := auth.locked_out(client):
+        raise HTTPException(429, f"Too many failed attempts. Try again in {wait} seconds.")
+    if not auth.check_credentials(req.username, req.password):
+        auth.record_failure(client)
+        raise HTTPException(401, "Incorrect username or password")
+    auth.clear_failures(client)
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        COOKIE_NAME,
+        auth.make_session(),
+        max_age=auth.session_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=auth.cookie_secure,
+    )
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def logout() -> Response:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(COOKIE_NAME)
+    return resp
+
+
+@app.get("/api/auth/status")
+async def auth_status() -> dict:
+    return {"enabled": state.auth.enabled, "username": state.auth.username if state.auth.enabled else None}
 
 
 def require_job(job_id: str) -> Job:

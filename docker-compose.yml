@@ -14,6 +14,12 @@ services:
       PRINTBRIDGE_PRINTER_KIND: ${PRINTBRIDGE_PRINTER_KIND:-creality_box}
       PRINTBRIDGE_PRINTER_URL: ${PRINTBRIDGE_PRINTER_URL:-}
       PRINTBRIDGE_PRINTER_API_KEY: ${PRINTBRIDGE_PRINTER_API_KEY:-}
+      # Login. Leave PRINTBRIDGE_PASSWORD empty to disable authentication.
+      PRINTBRIDGE_USERNAME: ${PRINTBRIDGE_USERNAME:-admin}
+      PRINTBRIDGE_PASSWORD: ${PRINTBRIDGE_PASSWORD:-}
+      PRINTBRIDGE_SESSION_DAYS: ${PRINTBRIDGE_SESSION_DAYS:-30}
+      # Set to true if PrintBridge is served over HTTPS (e.g. behind a reverse proxy).
+      PRINTBRIDGE_COOKIE_SECURE: ${PRINTBRIDGE_COOKIE_SECURE:-false}
 
 volumes:
   printbridge-data:

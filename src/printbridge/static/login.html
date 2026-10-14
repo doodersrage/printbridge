@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · PrintBridge</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='4' y='22' width='24' height='4' rx='1' fill='%23f97316'/><path d='M12 4h8v6l-4 5-4-5z' fill='%23f97316'/></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+  <form class="card login-card" id="login-form">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="22" width="24" height="4" rx="1"/><path d="M12 4h8v6l-4 5-4-5z"/></svg>
+      <div>
+        <h1>PrintBridge</h1>
+        <p>Creality Ender-3 V3 SE</p>
+      </div>
+    </div>
+    <label>Username<input name="username" autocomplete="username" required autofocus></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary" id="login-btn">Sign in</button>
+    <p class="error" id="login-err" role="alert"></p>
+  </form>
+  <script>
+    const form = document.getElementById("login-form");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("login-btn");
+      const err = document.getElementById("login-err");
+      btn.disabled = true;
+      err.textContent = "";
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+        });
+        if (res.ok) { location.replace("/"); return; }
+        const body = await res.json().catch(() => ({}));
+        err.textContent = body.detail || "Sign in failed";
+        form.password.select();
+      } catch {
+        err.textContent = "Could not reach PrintBridge";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
