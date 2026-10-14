@@ -161,6 +161,12 @@ async def test_box_status_paused_and_warnings():
     assert "microSD" in st.message and "not connected" in st.message
 
 
+async def test_box_err_field_is_not_reported_as_an_error():
+    _, host = box(lambda r: httpx.Response(200, json={**BOX_INFO, "err": 1}))
+    st = await host.status()
+    assert st.state == "Printing" and st.message is None
+
+
 async def test_box_idle_hides_placeholder_filename():
     info = {**BOX_INFO, "state": 0, "print": "Welcome to Creality"}
     _, host = box(lambda r: httpx.Response(200, json=info))

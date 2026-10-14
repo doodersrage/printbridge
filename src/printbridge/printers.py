@@ -297,8 +297,8 @@ class CrealityBox(PrintHost):
             messages.append("Wi-Fi Box is not connected to the printer")
         if num("tfCard") == 0:
             messages.append("No microSD card in the Wi-Fi Box; uploads need one")
-        if num("err"):
-            messages.append(f"Printer reported error {int(num('err'))}")
+        # The box's "err" field is not an error flag: it reads 1 throughout normal,
+        # healthy prints (seen on box firmware V3.04b06), so it is not reported.
         return PrinterStatus(
             online=True,
             state=state,
