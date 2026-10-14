@@ -254,6 +254,14 @@ Changing the password signs everyone out. After 5 wrong passwords from one IP
 address, that address is locked out for 5 minutes. `/healthz` stays public for
 the container health check.
 
+PrintBridge also protects itself when login is off. It refuses write requests
+coming from other websites, which could otherwise drive the printer through
+your browser. It never sends saved passwords or API keys back to the browser,
+and it won't import links that point at the server itself or at link-local
+addresses. The slicer can only be set with `PRINTBRIDGE_SLICER`, because it is
+executed. The login lockout counts failures per client IP, so behind a reverse
+proxy all clients share one counter.
+
 This is a single shared login meant for a home LAN. Don't expose PrintBridge
 directly to the internet. Put it behind a VPN or a reverse proxy with HTTPS,
 and set `PRINTBRIDGE_COOKIE_SECURE=true` there.

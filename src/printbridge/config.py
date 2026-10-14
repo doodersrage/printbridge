@@ -89,7 +89,10 @@ def load_settings() -> Settings:
             settings.printer.url = url
             settings.printer.kind = os.environ.get("PRINTBRIDGE_PRINTER_KIND", "creality_box")  # type: ignore[assignment]
             settings.printer.api_key = os.environ.get("PRINTBRIDGE_PRINTER_API_KEY", "")
-    if not settings.slicer_path:
+    # The slicer is executed, so the environment (or auto-detection) decides it,
+    # never a value stored in or restored into config.json.
+    settings.slicer_path = detect_slicer() or settings.slicer_path
+    if settings.slicer_path and not Path(settings.slicer_path).is_file():
         settings.slicer_path = detect_slicer()
     return settings
 

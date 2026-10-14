@@ -236,7 +236,8 @@
       <fieldset>
         <legend>Storage &amp; slicer</legend>
         <label>Delete finished jobs after (days)<input name="keep_days" type="number" min="0" max="3650" placeholder="0 = keep forever"></label>
-        <label>PrusaSlicer executable<input name="slicer_path" placeholder="auto-detect"></label>
+        <label>PrusaSlicer executable<input name="slicer_path" readonly placeholder="not found"></label>
+        <p class="muted small">Detected automatically; set <code>PRINTBRIDGE_SLICER</code> in the container to change it.</p>
         <label>Slice timeout (seconds)<input name="slice_timeout" type="number" min="30" max="7200"></label>
       </fieldset>
       <fieldset>

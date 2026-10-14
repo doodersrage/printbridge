@@ -81,6 +81,36 @@ app = FastAPI(title="PrintBridge", version=__version__, lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 
 
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def same_origin(request: Request) -> bool:
+    """Reject cross-site writes: a page on another site must not drive the printer.
+
+    Browsers send Origin on cross-site POSTs (including form posts, which need no
+    CORS preflight). Requests without Origin come from scripts like curl, which
+    a malicious web page cannot make.
+    """
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if not origin:
+        return True
+    from urllib.parse import urlsplit
+
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    return urlsplit(origin).netloc.lower() == host.split(",")[0].strip().lower()
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    if request.method in UNSAFE_METHODS and not same_origin(request):
+        return JSONResponse({"detail": "Cross-site request blocked"}, status_code=403)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     auth = state.auth
@@ -309,20 +339,36 @@ async def run_send(job: Job, start: bool) -> None:
 # ---- settings -------------------------------------------------------------
 
 
+# Secret fields are never sent to the browser. The UI shows them as "set"; sending
+# the placeholder (or leaving it empty with keep_secrets) keeps the stored value.
+SECRET_FIELDS = (("printer", "api_key"), ("notify", "smtp_password"), ("notify", "ntfy_token"), ("mqtt", "password"))
+SECRET_PLACEHOLDER = "••••••••"
+
+
+def masked(settings: config.Settings) -> dict:
+    data = settings.model_dump()
+    for section, key in SECRET_FIELDS:
+        data[section][key] = SECRET_PLACEHOLDER if data[section][key] else ""
+    return data
+
+
 @app.get("/api/settings")
-async def get_settings() -> config.Settings:
-    return state.settings
+async def get_settings() -> dict:
+    return masked(state.settings)
 
 
 @app.put("/api/settings")
-async def put_settings(settings: config.Settings) -> config.Settings:
-    if not settings.slicer_path:
-        settings.slicer_path = config.detect_slicer()
+async def put_settings(settings: config.Settings) -> dict:
+    for section, key in SECRET_FIELDS:
+        if getattr(getattr(settings, section), key) == SECRET_PLACEHOLDER:
+            setattr(getattr(settings, section), key, getattr(getattr(state.settings, section), key))
+    # The slicer runs as a program, so it is only set by the environment / auto-detection.
+    settings.slicer_path = state.settings.slicer_path or config.detect_slicer()
     config.save_settings(settings)
     state.settings = settings
     state.monitor.status = None  # re-poll with the new printer settings
     state.mqtt.restart()
-    return settings
+    return masked(settings)
 
 
 @app.post("/api/notify/test")
@@ -850,7 +896,11 @@ async def post_restore(file: UploadFile = File(...)) -> dict:
         restored = backup.restore(data)
     except (backup.BackupError, ValidationError, ValueError) as e:
         raise HTTPException(422, str(e))
+    slicer = state.settings.slicer_path
     state.settings = config.load_settings()
+    if state.settings.slicer_path != slicer:
+        state.settings.slicer_path = slicer
+        config.save_settings(state.settings)
     state.monitor.status = None
     state.mqtt.restart()
     return {"restored": restored}

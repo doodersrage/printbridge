@@ -62,6 +62,13 @@ def _gcode_for(command: str, nozzle: int = 0, bed: int = 0) -> list[str]:
     }[command]
 
 
+def _safe_remote_name(name: str) -> str:
+    parts = name.split("/")
+    if not name or name.startswith("/") or any(p in ("", ".", "..") for p in parts):
+        raise PrinterError("Invalid file name")
+    return name
+
+
 class PrintHost(ABC):
     supports_light = False
 
@@ -170,7 +177,7 @@ class OctoPrint(PrintHost):
         ]
 
     async def delete_file(self, name: str) -> None:
-        await self._request("DELETE", f"/api/files/local/{quote(name)}")
+        await self._request("DELETE", f"/api/files/local/{quote(_safe_remote_name(name), safe='')}")
 
 
 class Moonraker(PrintHost):
@@ -236,7 +243,7 @@ class Moonraker(PrintHost):
         return [RemoteFile(name=f["path"], size=f.get("size"), modified=f.get("modified")) for f in files]
 
     async def delete_file(self, name: str) -> None:
-        await self._request("DELETE", f"/server/files/gcodes/{quote(name)}")
+        await self._request("DELETE", f"/server/files/gcodes/{quote(_safe_remote_name(name), safe='/')}")
 
 
 class CrealityBox(PrintHost):

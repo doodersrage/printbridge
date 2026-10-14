@@ -197,7 +197,11 @@ def test_combine_writes_3mf(tmp_path):
 # ---- import -----------------------------------------------------------------
 
 
-async def test_import_direct_file_and_zip():
+async def test_import_direct_file_and_zip(monkeypatch):
+    async def no_dns(url):
+        return None
+
+    monkeypatch.setattr(importer, "check_destination", no_dns)
     zbuf = io.BytesIO()
     with zipfile.ZipFile(zbuf, "w") as z:
         z.writestr("thing/files/part.stl", b"solid")
@@ -502,3 +506,88 @@ async def test_finished_print_consumes_spool(tmp_path, monkeypatch):
     assert spools.loaded().remaining_g == 40
     assert sent[-1]["spool"] == "40 g left on Black — running low"
     assert history.load()[-1].spool == "Black"
+
+
+# ---- security hardening -------------------------------------------------------
+
+
+async def test_cross_site_writes_are_blocked(client):
+    body = {"quality": "draft"}
+    r = await client.put("/api/presets/x", json=body, headers={"origin": "http://evil.example"})
+    assert r.status_code == 403
+    r = await client.post("/api/restore", files={"file": ("b.zip", b"x")}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert (await client.put("/api/presets/x", json=body, headers={"origin": "http://test"})).status_code == 200
+    assert (await client.put("/api/presets/y", json=body)).status_code == 200  # scripts send no Origin
+    assert (await client.get("/api/presets", headers={"origin": "http://evil.example"})).status_code == 200
+
+
+async def test_security_headers(client):
+    r = await client.get("/")
+    assert r.headers["x-frame-options"] == "DENY" and r.headers["x-content-type-options"] == "nosniff"
+
+
+async def test_settings_never_return_secrets(client):
+    s = (await client.get("/api/settings")).json()
+    s["printer"]["api_key"] = "octo-key"
+    s["notify"]["smtp_password"] = "mail-pass"
+    s["mqtt"]["password"] = "mqtt-pass"
+    s["slicer_path"] = "/bin/sh"
+    r = (await client.put("/api/settings", json=s)).json()
+    assert r["printer"]["api_key"] == r["notify"]["smtp_password"] == r["mqtt"]["password"] == "••••••••"
+    assert r["notify"]["ntfy_token"] == ""
+    stored = client.main.state.settings
+    assert stored.printer.api_key == "octo-key" and stored.slicer_path != "/bin/sh"
+    # Sending the placeholder back keeps the secret; clearing the field removes it.
+    r["notify"]["smtp_password"] = ""
+    await client.put("/api/settings", json=r)
+    assert client.main.state.settings.printer.api_key == "octo-key"
+    assert client.main.state.settings.notify.smtp_password == ""
+
+
+async def test_import_refuses_internal_addresses():
+    for url in ("http://127.0.0.1:8000/x.stl", "http://localhost/x.stl", "http://169.254.169.254/latest/meta-data"):
+        with pytest.raises(importer.ImportError_, match="not allowed"):
+            await importer.download(url)
+
+
+async def test_import_checks_every_redirect(monkeypatch):
+    checked = []
+
+    async def check(url):
+        checked.append(url)
+        if "127.0.0.1" in url:
+            raise importer.ImportError_("Links to 127.0.0.1 are not allowed")
+
+    monkeypatch.setattr(importer, "check_destination", check)
+    t = httpx.MockTransport(lambda r: httpx.Response(302, headers={"location": "http://127.0.0.1/secret.stl"}))
+    with pytest.raises(importer.ImportError_, match="not allowed"):
+        await importer.download("https://example.com/x.stl", t)
+    assert checked == ["https://example.com/x.stl", "http://127.0.0.1/secret.stl"]
+
+
+def test_zip_total_size_limit(monkeypatch):
+    monkeypatch.setattr(importer, "MAX_UNZIPPED", 10)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("a.stl", b"x" * 8)
+        z.writestr("b.stl", b"x" * 8)
+    with pytest.raises(importer.ImportError_, match="512 MB total"):
+        importer.from_zip(buf.getvalue())
+
+
+async def test_remote_file_names_are_escaped():
+    from printbridge.config import PrinterConfig
+    from printbridge.printers import PrinterError, make_host
+
+    seen = []
+    t = httpx.MockTransport(lambda r: (seen.append(r.url.raw_path), httpx.Response(204))[1])
+    octo = make_host(PrinterConfig(kind="octoprint", url="http://octopi"), t)
+    await octo.delete_file("a b/c.gcode")
+    assert seen[-1] == b"/api/files/local/a%20b%2Fc.gcode"
+    for bad in ("../settings", "/etc/x", "a//b", ""):
+        with pytest.raises(PrinterError):
+            await octo.delete_file(bad)
+    moon = make_host(PrinterConfig(kind="moonraker", url="http://klipper"), t)
+    await moon.delete_file("sub/part.gcode")
+    assert seen[-1] == b"/server/files/gcodes/sub/part.gcode"

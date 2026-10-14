@@ -4,6 +4,17 @@ All notable changes to PrintBridge are listed here. Versions follow
 [Semantic Versioning](https://semver.org/); while the version is 0.x, minor
 releases may include breaking changes.
 
+## [Unreleased]
+
+### Security
+- Cross-site write requests (including form posts) are refused, so a web page cannot drive the printer or restore a backup through your browser. This matters most when login is off.
+- Settings no longer send saved passwords, tokens or API keys back to the browser.
+- The slicer path can only be set by `PRINTBRIDGE_SLICER` (or auto-detection), not through settings or a restored backup.
+- "Import from link" refuses loopback, link-local (cloud metadata) and similar addresses, checked on every redirect.
+- Zip imports are limited to 512 MB unpacked in total.
+- OctoPrint and Moonraker file deletion escapes file names and rejects `..` paths.
+- Added `X-Frame-Options`, `X-Content-Type-Options` and `Referrer-Policy` headers.
+
 ## [0.2.0] - 2026-10-14
 
 ### Added
