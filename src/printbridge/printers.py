@@ -42,6 +42,7 @@ class PrinterStatus(BaseModel):
     elapsed: float | None = None
     remaining: float | None = None
     message: str | None = None
+    light: bool | None = None  # None when the host does not report it
 
 
 class RemoteFile(BaseModel):
@@ -308,6 +309,7 @@ class CrealityBox(PrintHost):
             progress=num("printProgress"),
             elapsed=num("printJobTime") if printing else None,
             remaining=num("printLeftTime") if printing else None,
+            light=None if num("led_state") is None else num("led_state") == 1,
             message="; ".join(messages) or None,
         )
 

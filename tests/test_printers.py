@@ -161,6 +161,13 @@ async def test_box_status_paused_and_warnings():
     assert "microSD" in st.message and "not connected" in st.message
 
 
+async def test_box_reports_light_state():
+    _, host = box(lambda r: httpx.Response(200, json={**BOX_INFO, "led_state": 1}))
+    assert (await host.status()).light is True
+    _, host = box(lambda r: httpx.Response(200, json=BOX_INFO))
+    assert (await host.status()).light is None
+
+
 async def test_box_err_field_is_not_reported_as_an_error():
     _, host = box(lambda r: httpx.Response(200, json={**BOX_INFO, "err": 1}))
     st = await host.status()

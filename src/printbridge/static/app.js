@@ -100,6 +100,7 @@ async function refreshPrinter() {
   $$("[data-cmd]").forEach((b) => { b.disabled = blocked; });
   $("#gcode-form button").disabled = blocked;
   $("#light-toggle").hidden = !s.supports_light;
+  if (s.light != null) setLight(s.light);
   $("#light-toggle").disabled = !s.online;
   updatePrintButtons();
 }
@@ -275,13 +276,16 @@ $("#webcam-toggle").addEventListener("click", (e) => {
 });
 document.addEventListener("visibilitychange", () => syncWebcam(printer.webcam));
 
+function setLight(on) {
+  lightOn = on;
+  const btn = $("#light-toggle");
+  btn.setAttribute("aria-pressed", String(on));
+  btn.textContent = on ? "Light on" : "Light off";
+}
+
 $("#light-toggle").addEventListener("click", async (e) => {
   const next = !lightOn;
-  if (await sendCommand({ command: next ? "light_on" : "light_off" }, e.currentTarget)) {
-    lightOn = next;
-    e.currentTarget.setAttribute("aria-pressed", String(lightOn));
-    e.currentTarget.textContent = lightOn ? "Light on" : "Light";
-  }
+  if (await sendCommand({ command: next ? "light_on" : "light_off" }, e.currentTarget)) setLight(next);
 });
 
 $("#gcode-form").addEventListener("submit", async (e) => {
