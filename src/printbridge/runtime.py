@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-from . import calibration, combine, config, profiles
+from . import backup, calibration, combine, config, profiles
 from .auth import AuthConfig
 from .gcode import parse_stats
 from .jobs import Job, JobStore
@@ -23,6 +23,7 @@ ACCEPTED = {".3mf", ".stl", ".obj", ".gcode", ".zip"}
 MAX_UPLOAD = 256 * 1024 * 1024
 MAX_THUMBNAIL = 1024 * 1024
 PRUNE_INTERVAL = 3600
+BACKUP_CHECK_INTERVAL = 3600
 
 log = logging.getLogger("printbridge")
 
@@ -211,3 +212,16 @@ async def _read_upload(file: UploadFile, limit: int = MAX_UPLOAD) -> bytes:
             raise HTTPException(413, "File too large")
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def backup_loop() -> None:
+    """Write a daily configuration backup into the data volume while enabled."""
+    while True:
+        if state.settings.auto_backup:
+            try:
+                written = await asyncio.to_thread(backup.write_auto, state.settings.auto_backup_keep)
+                if written:
+                    log.info("Wrote automatic backup %s", written)
+            except OSError:
+                log.exception("Automatic backup failed")
+        await asyncio.sleep(BACKUP_CHECK_INTERVAL)

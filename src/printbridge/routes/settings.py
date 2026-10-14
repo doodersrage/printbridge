@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 import time
 
@@ -106,6 +106,19 @@ async def get_backup() -> Response:
     stamp = time.strftime("%Y%m%d-%H%M")
     return Response(backup.create(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="printbridge-backup-{stamp}.zip"'})
+
+
+@router.get("/api/backups")
+async def list_auto_backups() -> list[dict]:
+    return backup.list_auto()
+
+
+@router.get("/api/backups/{name}")
+async def get_auto_backup(name: str) -> FileResponse:
+    names = {b["name"] for b in backup.list_auto()}
+    if name not in names:  # only files from the listing, never arbitrary paths
+        raise HTTPException(404, "Backup not found")
+    return FileResponse(backup.auto_dir() / name, media_type="application/zip", filename=name)
 
 
 @router.post("/api/restore")

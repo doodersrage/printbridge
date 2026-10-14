@@ -61,6 +61,8 @@ class Settings(BaseModel):
     slicer_path: str = ""
     slice_timeout: int = 900
     keep_days: int = Field(0, ge=0, le=3650, description="Delete finished jobs older than this; 0 keeps them")
+    auto_backup: bool = Field(True, description="Write a configuration backup to the data volume every day")
+    auto_backup_keep: int = Field(7, ge=1, le=90)
     notify: NotifyConfig = NotifyConfig()
     mqtt: MqttConfig = MqttConfig()
     currency: str = Field("$", max_length=5)

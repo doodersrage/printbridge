@@ -242,7 +242,9 @@
       </fieldset>
       <fieldset>
         <legend>Backup</legend>
-        <p class="muted small">Settings (including passwords), presets, profile edits and print history. Jobs are not included.</p>
+        <p class="muted small">Settings (including passwords), presets, profile edits, spools and print history. Jobs are not included.</p>
+        <label class="check"><input type="checkbox" name="auto_backup"> Save a backup automatically every day, keeping the last <input name="auto_backup_keep" type="number" min="1" max="90" class="inline-num"> days</label>
+        <ul class="auto-backups small" id="auto-backups"></ul>
         <div class="row gap">
           <a class="button ghost" href="/api/backup" download>Download backup</a>
           <label class="button ghost file-button">Restore…<input type="file" id="restore-file" accept=".zip" hidden></label>

@@ -187,7 +187,10 @@ less.
 - **Job cleanup**: finished jobs can be deleted automatically after a number of
   days.
 - **Backup**: Settings → Backup downloads your settings (including passwords),
-  presets, profile edits and history as a zip, and restores one.
+  presets, profile edits, spools and history as a zip, and restores one.
+  PrintBridge also writes an **automatic backup every day** into the data
+  volume, under `backups/`, and keeps the last 7. You can download those from
+  the same place.
 
 ## Adding models
 

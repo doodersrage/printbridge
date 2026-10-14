@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import tempfile
 import time
 import zipfile
 
@@ -18,8 +20,42 @@ FILES = ("config.json", "presets.json", "history.jsonl", "spools.json")
 MAX_RESTORE = 20 * 1024 * 1024
 
 
+AUTO_DIR = "backups"
+AUTO_PREFIX = "printbridge-auto-"
+
+
 class BackupError(ValueError):
     pass
+
+
+def auto_dir():
+    return config.DATA_DIR / AUTO_DIR
+
+
+def list_auto() -> list[dict]:
+    d = auto_dir()
+    if not d.exists():
+        return []
+    files = sorted(d.glob(f"{AUTO_PREFIX}*.zip"), reverse=True)
+    return [{"name": f.name, "size": f.stat().st_size, "created": f.stat().st_mtime} for f in files]
+
+
+def write_auto(keep: int, now: float | None = None) -> str | None:
+    """Write today's automatic backup (once per day) and keep the newest `keep`."""
+    d = auto_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"{AUTO_PREFIX}{time.strftime('%Y-%m-%d', time.localtime(now))}.zip"
+    written = None
+    if not (d / name).exists():
+        # A unique temporary name, so two writers can never trip over each other.
+        fd, tmp_name = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".zip")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(create())
+        os.replace(tmp_name, d / name)
+        written = name
+    for old in sorted(d.glob(f"{AUTO_PREFIX}*.zip"), reverse=True)[max(keep, 1):]:
+        old.unlink()
+    return written
 
 
 def create() -> bytes:

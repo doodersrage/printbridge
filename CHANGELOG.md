@@ -6,6 +6,12 @@ releases may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- Daily automatic backups in the data volume, keeping the last 7 by default and downloadable from Settings → Backup.
+
+### Changed
+- Internal restructure: the API is split into route modules and the frontend into smaller scripts. Behaviour is unchanged.
+
 ### Security
 - Cross-site write requests (including form posts) are refused, so a web page cannot drive the printer or restore a backup through your browser. This matters most when login is off.
 - Settings no longer send saved passwords, tokens or API keys back to the browser.

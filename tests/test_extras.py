@@ -589,3 +589,32 @@ async def test_remote_file_names_are_escaped():
     moon = make_host(PrinterConfig(kind="moonraker", url="http://klipper"), t)
     await moon.delete_file("sub/part.gcode")
     assert seen[-1] == b"/server/files/gcodes/sub/part.gcode"
+
+
+# ---- automatic backups --------------------------------------------------------
+
+
+def test_auto_backup_daily_and_rotation(tmp_path, monkeypatch):
+    from printbridge import config
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    day = 86400
+    t0 = time.mktime((2026, 10, 1, 12, 0, 0, 0, 0, -1))
+    assert backup.write_auto(keep=3, now=t0) == "printbridge-auto-2026-10-01.zip"
+    assert backup.write_auto(keep=3, now=t0 + 3600) is None  # once per day
+    for i in range(1, 5):
+        backup.write_auto(keep=3, now=t0 + i * day)
+    names = [b["name"] for b in backup.list_auto()]
+    assert names == ["printbridge-auto-2026-10-05.zip", "printbridge-auto-2026-10-04.zip", "printbridge-auto-2026-10-03.zip"]
+
+
+async def test_auto_backup_api(client):
+    from printbridge import backup as bk
+
+    bk.write_auto(keep=7)
+    listing = (await client.get("/api/backups")).json()
+    assert len(listing) == 1
+    r = await client.get(f"/api/backups/{listing[0]['name']}")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert (await client.get("/api/backups/..%2Fconfig.json")).status_code == 404
+    assert (await client.get("/api/backups/config.json")).status_code == 404

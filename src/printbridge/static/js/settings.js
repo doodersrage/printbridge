@@ -51,6 +51,9 @@ $("#open-settings").addEventListener("click", async () => {
   sform.webcam_url.value = s.webcam_url;
   sform.public_url.value = s.public_url || location.origin;
   sform.currency.value = s.currency;
+  sform.auto_backup.checked = s.auto_backup;
+  sform.auto_backup_keep.value = s.auto_backup_keep;
+  loadAutoBackups();
   $("#restore-result").textContent = "";
   loadPrices();
   loadMqttStatus();
@@ -95,6 +98,8 @@ async function saveSettings() {
     webcam_url: sform.webcam_url.value.trim(),
     public_url: sform.public_url.value.trim(),
     currency: sform.currency.value.trim() || "$",
+    auto_backup: sform.auto_backup.checked,
+    auto_backup_keep: Number(sform.auto_backup_keep.value) || 7,
   };
   await api("/api/settings", { method: "PUT", json: body });
   const prices = Object.fromEntries($$("#price-fields input").map((i) => [i.dataset.material, Number(i.value) || 0]));
@@ -127,6 +132,20 @@ $("#notify-test").addEventListener("click", async () => {
     out.textContent = e.message;
   }
 });
+
+async function loadAutoBackups() {
+  const ul = $("#auto-backups");
+  ul.replaceChildren();
+  let list = [];
+  try { list = await api("/api/backups"); } catch { return; }
+  for (const b of list) {
+    const li = document.createElement("li");
+    const a = Object.assign(document.createElement("a"), { href: `/api/backups/${encodeURIComponent(b.name)}`, textContent: b.name });
+    a.setAttribute("download", "");
+    li.append(a, ` · ${fmtSize(b.size)}`);
+    ul.append(li);
+  }
+}
 
 $("#restore-file").addEventListener("change", async (e) => {
   const file = e.target.files[0];
