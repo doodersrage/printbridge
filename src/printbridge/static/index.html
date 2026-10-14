@@ -17,6 +17,7 @@
       </div>
     </div>
     <div class="row gap">
+      <button class="ghost" id="open-profiles" type="button">Profiles</button>
       <button class="ghost" id="open-settings" type="button">Settings</button>
       <button class="ghost" id="logout" type="button" hidden>Sign out</button>
     </div>
@@ -43,10 +44,36 @@
         </div>
       </div>
       <p class="muted small" id="printer-msg"></p>
+
+      <div class="controls" id="controls">
+        <div class="row gap">
+          <select id="preheat-material" aria-label="Preheat material"></select>
+          <button type="button" data-cmd="preheat">Preheat</button>
+          <button type="button" data-cmd="cooldown">Cool down</button>
+          <button type="button" data-cmd="home">Home</button>
+          <button type="button" class="ghost" id="light-toggle" hidden aria-pressed="false">Light</button>
+        </div>
+        <details class="console">
+          <summary>G-code console</summary>
+          <form class="row gap" id="gcode-form">
+            <input id="gcode-input" placeholder="e.g. M114 or G28; M84" autocomplete="off" spellcheck="false" maxlength="500">
+            <button type="submit">Send</button>
+          </form>
+          <p class="muted small">Disabled while printing. Separate several commands with ";".</p>
+        </details>
+        <button type="button" class="ghost" id="open-files">Printer storage…</button>
+      </div>
     </section>
 
     <section class="card" id="upload">
-      <h2>New print</h2>
+      <div class="card-head">
+        <h2>New print</h2>
+        <div class="row gap presets">
+          <select id="preset" aria-label="Preset"><option value="">Preset…</option></select>
+          <button type="button" class="ghost small-btn" id="preset-save">Save as…</button>
+          <button type="button" class="ghost small-btn" id="preset-delete" disabled>Delete</button>
+        </div>
+      </div>
       <form id="upload-form">
         <label class="drop" id="drop">
           <input type="file" id="file" accept=".3mf,.stl,.obj,.gcode" required>
@@ -70,12 +97,16 @@
           <label>Brim width (mm)<input type="number" name="brim" min="0" max="20" step="1" value="0"></label>
           <label>Nozzle °C<input type="number" name="nozzle_temp" min="150" max="260" placeholder="material default"></label>
           <label>Bed °C<input type="number" name="bed_temp" min="0" max="100" placeholder="material default"></label>
+          <label>Scale %<input type="number" name="scale" min="10" max="1000" step="any" value="100"></label>
+          <label>Rotate °<input type="number" name="rotate" min="-360" max="360" step="any" value="0"></label>
+          <label>Copies<input type="number" name="copies" min="1" max="50" step="1" value="1"></label>
         </div>
         <div class="checks">
           <label class="check"><input type="checkbox" name="arrange" checked> Arrange &amp; center on bed</label>
           <label class="check"><input type="checkbox" name="probe_bed"> Probe a fresh bed mesh (G29) before printing</label>
         </div>
         <button type="submit" class="primary" id="upload-btn">Upload &amp; slice</button>
+        <div class="bar upload-bar" id="upload-bar" hidden><div></div></div>
         <p class="error" id="upload-err" role="alert"></p>
       </form>
     </section>
@@ -109,7 +140,22 @@
         <label class="check http-only"><input type="checkbox" name="verify_tls" checked> Verify TLS certificates</label>
       </fieldset>
       <fieldset>
-        <legend>Slicer</legend>
+        <legend>Notifications</legend>
+        <p class="muted small">Get told when a print finishes. Use an <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> topic URL for phone push notifications, and/or a webhook URL (for example a Home Assistant webhook) that receives a JSON event.</p>
+        <label>ntfy topic URL<input name="ntfy_url" placeholder="https://ntfy.sh/my-printer-topic"></label>
+        <label>ntfy access token<input name="ntfy_token" type="password" autocomplete="off" placeholder="only for protected topics"></label>
+        <label>Webhook URL<input name="webhook_url" placeholder="http://homeassistant.local:8123/api/webhook/…"></label>
+        <div class="check-row">
+          <label class="check"><input type="checkbox" name="on_start"> Started</label>
+          <label class="check"><input type="checkbox" name="on_finish"> Finished</label>
+          <label class="check"><input type="checkbox" name="on_stop"> Stopped</label>
+          <label class="check"><input type="checkbox" name="on_error"> Errors</label>
+        </div>
+        <div class="row gap"><button type="button" class="ghost" id="notify-test">Save &amp; send test</button><span class="small" id="notify-result"></span></div>
+      </fieldset>
+      <fieldset>
+        <legend>Storage &amp; slicer</legend>
+        <label>Delete finished jobs after (days)<input name="keep_days" type="number" min="0" max="3650" placeholder="0 = keep forever"></label>
         <label>PrusaSlicer executable<input name="slicer_path" placeholder="auto-detect"></label>
         <label>Slice timeout (seconds)<input name="slice_timeout" type="number" min="30" max="7200"></label>
       </fieldset>
@@ -121,6 +167,54 @@
     </form>
   </dialog>
 
+  <dialog id="profiles" class="wide-dialog" aria-labelledby="profiles-title">
+    <div class="dialog-head">
+      <h2 id="profiles-title">Slicer profiles</h2>
+      <button type="button" class="ghost" id="profiles-close" aria-label="Close">✕</button>
+    </div>
+    <p class="muted small">Edits are saved in PrintBridge's data volume, survive image updates, and apply to the next slice. Profiles use PrusaSlicer's config keys; the first comment line is the name shown in menus.</p>
+    <div class="profiles-layout">
+      <nav class="profile-list" id="profile-list"></nav>
+      <div class="profile-editor">
+        <div class="row gap between">
+          <strong id="profile-name">Select a profile</strong>
+          <span class="pill" id="profile-badge" hidden></span>
+        </div>
+        <textarea id="profile-text" spellcheck="false" disabled></textarea>
+        <p class="error" id="profile-err" role="alert"></p>
+        <div class="row gap between">
+          <div class="row gap">
+            <button type="button" class="ghost" id="profile-new-quality">New quality…</button>
+            <button type="button" class="ghost" id="profile-new-material">New material…</button>
+          </div>
+          <div class="row gap">
+            <button type="button" class="ghost danger" id="profile-reset" hidden>Reset to default</button>
+            <button type="button" class="primary" id="profile-save" disabled>Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="files" class="wide-dialog" aria-labelledby="files-title">
+    <div class="dialog-head">
+      <h2 id="files-title">Printer storage</h2>
+      <button type="button" class="ghost" id="files-close" aria-label="Close">✕</button>
+    </div>
+    <p class="muted small" id="files-summary">Loading…</p>
+    <div class="files-table-wrap">
+      <table class="files-table">
+        <thead><tr><th><input type="checkbox" id="files-all" aria-label="Select all"></th><th>File</th><th class="num">Size</th><th>Date</th></tr></thead>
+        <tbody id="files-body"></tbody>
+      </table>
+    </div>
+    <p class="error" id="files-err" role="alert"></p>
+    <div class="row gap between">
+      <button type="button" class="ghost" id="files-select-mine">Select PrintBridge uploads</button>
+      <button type="button" class="danger" id="files-delete" disabled>Delete selected</button>
+    </div>
+  </dialog>
+
   <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
     <div class="viewer-head">
       <div class="viewer-title">
@@ -128,7 +222,11 @@
         <span class="muted small" id="viewer-info"></span>
       </div>
       <div class="row gap">
-        <button type="button" class="ghost" id="viewer-fit">Fit model</button>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" data-mode="model" id="tab-model">Model</button>
+          <button type="button" role="tab" data-mode="toolpaths" id="tab-toolpaths">Toolpaths</button>
+        </div>
+        <button type="button" class="ghost" id="viewer-fit">Fit</button>
         <button type="button" class="ghost" id="viewer-bed">Whole bed</button>
         <button type="button" class="ghost" id="viewer-close" aria-label="Close viewer">✕</button>
       </div>
@@ -136,6 +234,13 @@
     <div class="viewer-stage">
       <canvas id="viewer-canvas"></canvas>
       <p class="viewer-status" id="viewer-status"></p>
+      <div class="legend" id="viewer-legend" hidden></div>
+    </div>
+    <div class="layer-bar" id="layer-bar" hidden>
+      <label class="layer-slider">Layer <output id="layer-out"></output>
+        <input type="range" id="layer-range" min="1" max="1" value="1">
+      </label>
+      <label class="check"><input type="checkbox" id="layer-only"> Only this layer</label>
     </div>
     <p class="muted small viewer-help">Drag to rotate · right-drag or two fingers to pan · scroll or pinch to zoom. Placement matches the slice settings; the orange dot is the bed's front-left corner.</p>
   </dialog>
@@ -145,10 +250,11 @@
       <div class="job-main">
         <div class="job-title"><strong class="job-name"></strong><span class="pill job-state"></span></div>
         <div class="muted small job-meta"></div>
+        <label class="plate-pick small" hidden>Plate <select class="job-plate"></select></label>
         <div class="error small job-error"></div>
       </div>
       <div class="job-actions row gap">
-        <button type="button" class="ghost" data-act="view" title="View the 3D model on the bed">3D view</button>
+        <button type="button" class="ghost" data-act="view" title="3D model and sliced toolpaths">3D view</button>
         <a class="button ghost" data-act="download" download>G-code</a>
         <button type="button" class="ghost" data-act="reslice" title="Slice again using the settings in New print">Re-slice</button>
         <button type="button" data-act="upload">Upload only</button>

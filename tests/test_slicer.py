@@ -87,3 +87,36 @@ async def test_export_preview_uses_same_placement(tmp_path, monkeypatch):
     out = await slicer_mod.export_preview("ps", tmp_path / "m.3mf", tmp_path / "p.stl", SliceOptions(arrange=False))
     assert out.exists()
     assert seen["cmd"][:2] == ["ps", "--export-stl"] and "--dont-arrange" in seen["cmd"]
+
+
+def test_transform_args():
+    from printbridge.slicer import placement_args, transform_args
+
+    assert placement_args(SliceOptions()) == ["--center", "110,110"]
+    opts = SliceOptions(scale=150, rotate=-90, copies=3, arrange=False)
+    assert transform_args(opts) == ["--scale", "150%", "--rotate", "-90"]
+    assert placement_args(opts) == ["--duplicate", "3", "--center", "110,110"]
+    assert placement_args(SliceOptions(arrange=False)) == ["--dont-arrange"]
+    assert transform_args(SliceOptions()) == []
+
+
+async def test_scale_is_applied_before_copies(tmp_path, monkeypatch):
+    from printbridge import slicer as slicer_mod
+
+    calls = []
+
+    async def fake_run(cmd, timeout):
+        calls.append(cmd)
+        Path(cmd[cmd.index("--output") + 1]).write_bytes(b"x")
+        return 0, ""
+
+    monkeypatch.setattr(slicer_mod, "_run", fake_run)
+    monkeypatch.setattr(slicer_mod, "_check_slicer", lambda s: None)
+    await slicer_mod.slice_model("ps", tmp_path / "m.3mf", tmp_path / "o.gcode", SliceOptions(scale=150, copies=2))
+    prep, final = calls
+    assert "--export-3mf" in prep and "--scale" in prep and "--duplicate" not in prep
+    assert "--duplicate" in final and "--scale" not in final and final[-1].endswith("transformed.3mf")
+
+    calls.clear()
+    await slicer_mod.slice_model("ps", tmp_path / "m.3mf", tmp_path / "o.gcode", SliceOptions(copies=2))
+    assert len(calls) == 1  # no transform pass needed

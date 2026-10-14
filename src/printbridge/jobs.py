@@ -13,8 +13,11 @@ from pydantic import BaseModel
 
 from .gcode import GcodeStats
 from .slicer import SliceOptions
+from .threemf import Plate
 
-JobState = Literal["queued", "slicing", "ready", "failed", "sending", "sent"]
+JobState = Literal["queued", "slicing", "ready", "failed", "sending", "sent", "printing", "printed", "stopped"]
+# States in which the job's files are not being worked on and it may be deleted or re-sliced.
+IDLE_STATES = ("ready", "failed", "sent", "printed", "stopped")
 
 
 class Job(BaseModel):
@@ -28,6 +31,8 @@ class Job(BaseModel):
     error: str | None = None
     sent_at: float | None = None
     started_print: bool = False
+    finished_at: float | None = None
+    plates: list[Plate] | None = None
 
     @property
     def gcode_name(self) -> str:
@@ -62,6 +67,28 @@ class JobStore:
 
     def preview_path(self, job: Job) -> Path:
         return self.dir(job) / "preview.stl"
+
+    def toolpath_path(self, job: Job) -> Path:
+        return self.dir(job) / "toolpaths.bin"
+
+    def plate_path(self, job: Job, plate: int) -> Path:
+        return self.dir(job) / f"plate-{plate}.3mf"
+
+    def find_by_gcode_name(self, name: str) -> Job | None:
+        """Most recently sent job whose G-code has this file name."""
+        name = Path(name).name
+        matches = [j for j in self._jobs.values() if j.gcode_name == name and j.sent_at]
+        return max(matches, key=lambda j: j.sent_at or 0, default=None)
+
+    def prune(self, max_age_days: int) -> list[str]:
+        """Delete idle jobs older than max_age_days. Returns the deleted job ids."""
+        if max_age_days <= 0:
+            return []
+        cutoff = time.time() - max_age_days * 86400
+        old = [j for j in self._jobs.values() if j.state in IDLE_STATES and (j.finished_at or j.sent_at or j.created) < cutoff]
+        for job in old:
+            self.delete(job)
+        return [j.id for j in old]
 
     def create(self, filename: str, options: SliceOptions | None) -> Job:
         ext = Path(filename).suffix.lower()

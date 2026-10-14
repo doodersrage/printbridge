@@ -28,10 +28,22 @@ class PrinterConfig(BaseModel):
     verify_tls: bool = True
 
 
+class NotifyConfig(BaseModel):
+    ntfy_url: str = Field("", description="ntfy topic URL, e.g. https://ntfy.sh/my-printer")
+    ntfy_token: str = ""
+    webhook_url: str = Field("", description="POSTs a JSON event (works with Home Assistant webhooks)")
+    on_start: bool = False
+    on_finish: bool = True
+    on_stop: bool = True
+    on_error: bool = True
+
+
 class Settings(BaseModel):
     printer: PrinterConfig = PrinterConfig()
     slicer_path: str = ""
     slice_timeout: int = 900
+    keep_days: int = Field(0, ge=0, le=3650, description="Delete finished jobs older than this; 0 keeps them")
+    notify: NotifyConfig = NotifyConfig()
 
 
 def detect_slicer() -> str:

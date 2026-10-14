@@ -1,29 +1,68 @@
-// 3D preview of a job's model on the Ender-3 V3 SE bed (three.js, vendored).
+// 3D preview on the Ender-3 V3 SE bed: the model as it will be placed, and the
+// sliced toolpaths layer by layer (three.js, vendored).
 import * as THREE from "./vendor/three.module.min.js";
 import { STLLoader } from "./vendor/STLLoader.js";
 import { OrbitControls } from "./vendor/OrbitControls.js";
 
 const BED = 220;
 const MAX_Z = 250;
+const HAS_GCODE = ["ready", "sent", "printing", "printed", "stopped"];
 
-const dlg = document.getElementById("viewer");
-const canvas = document.getElementById("viewer-canvas");
-const statusEl = document.getElementById("viewer-status");
-const infoEl = document.getElementById("viewer-info");
+// Feature colours, close to PrusaSlicer's preview. Cura-style names map onto the same colours.
+const FEATURE_COLORS = {
+  "Perimeter": "#ffd84d",
+  "External perimeter": "#ff8a3d",
+  "Overhang perimeter": "#3a5bff",
+  "Internal infill": "#c0392b",
+  "Solid infill": "#a259d9",
+  "Top solid infill": "#ff4d6d",
+  "Ironing": "#ff9e80",
+  "Bridge infill": "#4d8fd1",
+  "Gap fill": "#e8e8e8",
+  "Skirt/Brim": "#14a085",
+  "Skirt": "#14a085",
+  "Brim": "#14a085",
+  "Support material": "#2ecc40",
+  "Support material interface": "#1b8a2a",
+  "Wipe tower": "#b3e3ab",
+  "Custom": "#7f8c8d",
+  "Extrusion": "#ff8a3d",
+  "WALL-OUTER": "#ff8a3d",
+  "WALL-INNER": "#ffd84d",
+  "FILL": "#c0392b",
+  "SKIN": "#a259d9",
+  "SUPPORT": "#2ecc40",
+  "SUPPORT-INTERFACE": "#1b8a2a",
+  "SKIRT": "#14a085",
+  "PRIME-TOWER": "#b3e3ab",
+};
+const FALLBACK = ["#e67e22", "#16a085", "#8e44ad", "#2980b9", "#d35400", "#27ae60"];
 
-let renderer, scene, camera, controls, bedGroup, mesh, frameId, resizeObs;
-let requestToken = 0;
+const $ = (id) => document.getElementById(id);
+const dlg = $("viewer");
+const canvas = $("viewer-canvas");
+const statusEl = $("viewer-status");
+const infoEl = $("viewer-info");
+const legendEl = $("viewer-legend");
+const layerBar = $("layer-bar");
+const layerRange = $("layer-range");
+const layerOut = $("layer-out");
+const layerOnly = $("layer-only");
+
+let renderer, scene, camera, controls, bedGroup, frameId;
+let job = null;
+let mode = "model";
+let token = 0;
+const views = { model: null, toolpaths: null }; // {object, info, bounds, ...}
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 function setup() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
+  camera = new THREE.PerspectiveCamera(40, 1, 0.5, 5000);
   camera.up.set(0, 0, 1); // slicer coordinates are Z-up
-
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.screenSpacePanning = true;
@@ -36,12 +75,14 @@ function setup() {
   fill.position.set(-200, 300, 150);
   scene.add(fill);
 
-  resizeObs = new ResizeObserver(resize);
-  resizeObs.observe(canvas.parentElement);
+  new ResizeObserver(resize).observe(canvas.parentElement);
 }
 
 function buildBed() {
-  if (bedGroup) scene.remove(bedGroup);
+  if (bedGroup) {
+    scene.remove(bedGroup);
+    bedGroup.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+  }
   bedGroup = new THREE.Group();
   const plate = new THREE.Mesh(
     new THREE.PlaneGeometry(BED, BED),
@@ -62,11 +103,7 @@ function buildBed() {
   volume.position.set(BED / 2, BED / 2, MAX_Z / 2);
   bedGroup.add(volume);
 
-  // Small marker at the bed origin (front-left) so orientation is obvious.
-  const origin = new THREE.Mesh(
-    new THREE.CircleGeometry(3, 24),
-    new THREE.MeshBasicMaterial({ color: cssVar("--accent") }),
-  );
+  const origin = new THREE.Mesh(new THREE.CircleGeometry(3, 24), new THREE.MeshBasicMaterial({ color: cssVar("--accent") }));
   origin.position.set(0, 0, 0.05);
   bedGroup.add(origin);
 
@@ -76,30 +113,26 @@ function buildBed() {
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = canvas.parentElement;
-  if (!w || !h) return;
+  if (!w || !h || !renderer) return;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
 
-function frame(target, size) {
-  const dist = Math.max(size, 60) * 2.1;
+function frame(box) {
+  const size = box.getSize(new THREE.Vector3());
+  const target = box.getCenter(new THREE.Vector3());
+  const dist = Math.max(size.x, size.y, size.z, 60) * 2.1;
   camera.position.set(target.x + dist * 0.55, target.y - dist * 1.05, target.z + dist * 0.75);
   controls.target.copy(target);
   controls.update();
 }
 
-function fitModel() {
-  if (!mesh) return fitBed();
-  const box = mesh.geometry.boundingBox.clone();
-  // A model outside the build volume is only meaningful next to the bed.
-  if (mesh.userData.offBed) box.union(new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(BED, BED, 0)));
-  const size = box.getSize(new THREE.Vector3());
-  frame(box.getCenter(new THREE.Vector3()), Math.max(size.x, size.y, size.z));
-}
+const bedBox = () => new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(BED, BED, 40));
 
-function fitBed() {
-  frame(new THREE.Vector3(BED / 2, BED / 2, 20), BED * 0.95);
+function fit() {
+  const v = views[mode];
+  frame(v?.bounds ? v.bounds.clone() : bedBox());
 }
 
 function loop() {
@@ -108,80 +141,227 @@ function loop() {
   renderer.render(scene, camera);
 }
 
-function clearModel() {
-  if (!mesh) return;
-  scene.remove(mesh);
-  mesh.geometry.dispose();
-  mesh.material.dispose();
-  mesh = null;
-}
-
-function fmt(n) {
-  return n.toFixed(1);
-}
-
-async function open(job) {
-  if (!renderer) setup();
-  buildBed();
-  clearModel();
-  const token = ++requestToken;
-  document.getElementById("viewer-title").textContent = job.name;
-  infoEl.textContent = "";
-  infoEl.classList.remove("error");
-  statusEl.textContent = "Loading model…";
-  statusEl.hidden = false;
-  dlg.showModal();
-  resize();
-  fitBed();
-  cancelAnimationFrame(frameId);
-  loop();
-
-  try {
-    const res = await fetch(`/api/jobs/${job.id}/preview.stl`);
-    if (res.status === 401) return location.replace("/login");
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `Preview failed (${res.status})`);
+function disposeViews() {
+  for (const key of Object.keys(views)) {
+    const v = views[key];
+    if (v?.object) {
+      scene.remove(v.object);
+      v.object.geometry.dispose();
+      v.object.material.dispose();
     }
-    const geometry = new STLLoader().parse(await res.arrayBuffer());
-    if (token !== requestToken) return geometry.dispose();
-    geometry.computeBoundingBox();
-    const box = geometry.boundingBox;
-    const size = box.getSize(new THREE.Vector3());
-    const offBed = box.min.x < -0.5 || box.min.y < -0.5 || box.max.x > BED + 0.5 || box.max.y > BED + 0.5 || box.max.z > MAX_Z;
-
-    mesh = new THREE.Mesh(
-      geometry,
-      new THREE.MeshStandardMaterial({
-        color: offBed ? cssVar("--bad") : cssVar("--accent"),
-        roughness: 0.55,
-        metalness: 0.05,
-      }),
-    );
-    mesh.userData.offBed = offBed;
-    scene.add(mesh);
-    statusEl.hidden = true;
-
-    const tris = geometry.attributes.position.count / 3;
-    infoEl.textContent = `${fmt(size.x)} × ${fmt(size.y)} × ${fmt(size.z)} mm · ${tris.toLocaleString()} triangles`;
-    if (offBed) {
-      infoEl.textContent += " · extends outside the 220 × 220 × 250 mm build volume";
-      infoEl.classList.add("error");
-    }
-    fitModel();
-  } catch (e) {
-    if (token !== requestToken) return;
-    statusEl.textContent = e.message;
+    views[key] = null;
   }
 }
 
-dlg.addEventListener("close", () => {
-  requestToken++;
+function setStatus(text) {
+  statusEl.textContent = text || "";
+  statusEl.hidden = !text;
+}
+
+function setInfo(text, isError = false) {
+  infoEl.textContent = text || "";
+  infoEl.classList.toggle("error", isError);
+}
+
+async function fetchOk(url) {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    location.replace("/login");
+    throw new Error("Signed out");
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed (${res.status})`);
+  }
+  return res.arrayBuffer();
+}
+
+/* ---- model ---- */
+
+async function loadModel(t) {
+  const geometry = new STLLoader().parse(await fetchOk(`/api/jobs/${job.id}/preview.stl`));
+  if (t !== token) return geometry.dispose();
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  const size = box.getSize(new THREE.Vector3());
+  const offBed = box.min.x < -0.5 || box.min.y < -0.5 || box.max.x > BED + 0.5 || box.max.y > BED + 0.5 || box.max.z > MAX_Z;
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ color: offBed ? cssVar("--bad") : cssVar("--accent"), roughness: 0.55, metalness: 0.05 }),
+  );
+  const bounds = box.clone();
+  // A model outside the build volume is only meaningful next to the bed.
+  if (offBed) bounds.union(new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(BED, BED, 0)));
+  const tris = geometry.attributes.position.count / 3;
+  let info = `${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)} mm · ${tris.toLocaleString()} triangles`;
+  if (offBed) info += " · extends outside the 220 × 220 × 250 mm build volume";
+  return { object: mesh, bounds, info, error: offBed };
+}
+
+/* ---- toolpaths ---- */
+
+function parseToolpaths(buf) {
+  const view = new DataView(buf);
+  if (new TextDecoder().decode(new Uint8Array(buf, 0, 4)) !== "PBTP") throw new Error("Unrecognised preview data");
+  const hlen = view.getUint32(4, true);
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hlen)));
+  const n = header.segments;
+  const coords = new Float32Array(buf, 8 + hlen, n * 4);
+  const types = new Uint8Array(buf, 8 + hlen + n * 16, n);
+  return { header, coords, types };
+}
+
+function colorFor(name, i) {
+  return new THREE.Color(FEATURE_COLORS[name] || FALLBACK[i % FALLBACK.length]);
+}
+
+async function loadToolpaths(t) {
+  const { header, coords, types } = parseToolpaths(await fetchOk(`/api/jobs/${job.id}/toolpaths`));
+  if (t !== token) return null;
+  const n = header.segments;
+  if (!n) throw new Error("No extrusion moves found in this G-code");
+
+  const positions = new Float32Array(n * 6);
+  const colors = new Uint8Array(n * 6);
+  const palette = header.types.map((name, i) => colorFor(name, i));
+  const rgb = palette.map((c) => [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)]);
+  const layerStart = [];
+  let seg = 0;
+  for (const layer of header.layers) {
+    layerStart.push(seg);
+    for (; seg < layer.end; seg++) {
+      const o = seg * 6, c = seg * 4;
+      positions[o] = coords[c];
+      positions[o + 1] = coords[c + 1];
+      positions[o + 2] = layer.z;
+      positions[o + 3] = coords[c + 2];
+      positions[o + 4] = coords[c + 3];
+      positions[o + 5] = layer.z;
+      const [r, g, b] = rgb[types[seg]];
+      colors[o] = colors[o + 3] = r;
+      colors[o + 1] = colors[o + 4] = g;
+      colors[o + 2] = colors[o + 5] = b;
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3, true));
+  const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ vertexColors: true }));
+
+  const used = [...new Set(types)].sort((a, b) => a - b);
+  // Frame the part itself, not the purge line the start G-code draws at the bed's edge.
+  const custom = header.types.indexOf("Custom");
+  const bounds = new THREE.Box3();
+  const p = new THREE.Vector3();
+  for (let i = 0; i < n; i++) {
+    if (types[i] === custom) continue;
+    bounds.expandByPoint(p.set(positions[i * 6], positions[i * 6 + 1], positions[i * 6 + 2]));
+    bounds.expandByPoint(p.set(positions[i * 6 + 3], positions[i * 6 + 4], positions[i * 6 + 5]));
+  }
+  if (bounds.isEmpty()) {
+    const [x0, y0, x1, y1] = header.bounds;
+    bounds.set(new THREE.Vector3(x0, y0, 0), new THREE.Vector3(x1, y1, header.layers.at(-1)?.z ?? 0));
+  }
+  bounds.min.z = 0;
+  let info = `${header.layers.length.toLocaleString()} layers · ${n.toLocaleString()} moves`;
+  if (header.truncated) info += " · preview truncated (very large file)";
+  return { object: lines, bounds, info, layers: header.layers, layerStart, legend: used.map((i) => [header.types[i], palette[i]]) };
+}
+
+function applyLayer() {
+  const v = views.toolpaths;
+  if (!v) return;
+  const idx = Number(layerRange.value) - 1;
+  const end = v.layers[idx].end;
+  const start = layerOnly.checked ? v.layerStart[idx] : 0;
+  v.object.geometry.setDrawRange(start * 2, (end - start) * 2);
+  layerOut.textContent = `${idx + 1} / ${v.layers.length} · Z ${v.layers[idx].z.toFixed(2)} mm`;
+}
+layerRange.addEventListener("input", applyLayer);
+layerOnly.addEventListener("change", applyLayer);
+
+function renderLegend(entries) {
+  legendEl.replaceChildren(...entries.map(([name, color]) => {
+    const s = document.createElement("span");
+    const sw = document.createElement("i");
+    sw.style.background = `#${color.getHexString()}`;
+    s.append(sw, name);
+    return s;
+  }));
+  legendEl.hidden = !entries.length;
+}
+
+/* ---- mode switching ---- */
+
+async function show(next) {
+  mode = next;
+  const t = token;
+  for (const [key, v] of Object.entries(views)) if (v?.object) v.object.visible = key === mode;
+  document.querySelectorAll("#viewer .tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
+  layerBar.hidden = mode !== "toolpaths";
+  legendEl.hidden = true;
+
+  let v = views[mode];
+  if (!v) {
+    setInfo("");
+    setStatus(mode === "model" ? "Loading model…" : "Reading G-code…");
+    try {
+      v = await (mode === "model" ? loadModel(t) : loadToolpaths(t));
+    } catch (e) {
+      if (t === token && mode === next) setStatus(e.message);
+      return;
+    }
+    if (!v || t !== token) return;
+    views[next] = v;
+    scene.add(v.object);
+    v.object.visible = mode === next;
+    if (mode !== next) return;
+  }
+  setStatus("");
+  setInfo(v.info, v.error);
+  if (mode === "toolpaths") {
+    layerRange.max = String(v.layers.length);
+    if (!v.touched) {
+      layerRange.value = String(v.layers.length);
+      layerOnly.checked = false;
+      v.touched = true;
+    }
+    applyLayer();
+    renderLegend(v.legend);
+  }
+  fit();
+}
+
+async function open(j, startMode = "model") {
+  if (!renderer) setup();
+  token++;
+  disposeViews();
+  buildBed();
+  job = j;
+  $("viewer-title").textContent = j.name;
+  const canModel = !!j.options;
+  const canPaths = HAS_GCODE.includes(j.state);
+  $("tab-model").disabled = !canModel;
+  $("tab-toolpaths").disabled = !canPaths;
+  $("tab-toolpaths").title = canPaths ? "" : "Available once the job has been sliced";
+  dlg.showModal();
+  resize();
+  frame(bedBox());
   cancelAnimationFrame(frameId);
-  clearModel();
+  loop();
+  show(startMode === "toolpaths" && canPaths ? "toolpaths" : canModel ? "model" : "toolpaths");
+}
+
+dlg.addEventListener("close", () => {
+  token++;
+  cancelAnimationFrame(frameId);
+  disposeViews();
 });
-document.getElementById("viewer-close").addEventListener("click", () => dlg.close());
-document.getElementById("viewer-fit").addEventListener("click", fitModel);
-document.getElementById("viewer-bed").addEventListener("click", fitBed);
+document.querySelectorAll("#viewer .tabs button").forEach((b) => b.addEventListener("click", () => {
+  if (!b.disabled && b.dataset.mode !== mode) show(b.dataset.mode);
+}));
+$("viewer-close").addEventListener("click", () => dlg.close());
+$("viewer-fit").addEventListener("click", fit);
+$("viewer-bed").addEventListener("click", () => frame(bedBox()));
 
 window.PrintBridgeViewer = { open };

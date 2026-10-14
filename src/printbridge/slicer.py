@@ -12,26 +12,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-PROFILE_DIR = Path(__file__).parent / "profiles"
-PRINTER_PROFILE = PROFILE_DIR / "ender3v3se.ini"
+from . import profiles
+
 BED_CENTER = (110, 110)
 BED_MESH_MARKER = "@BED_MESH@"
 
-QUALITIES = {
-    "draft": "Draft — 0.28 mm",
-    "standard": "Standard — 0.20 mm",
-    "fine": "Fine — 0.12 mm",
-}
-MATERIALS = {
-    "pla": "PLA",
-    "petg": "PETG",
-    "tpu": "TPU (95A)",
-}
-
 
 class SliceOptions(BaseModel):
-    quality: Literal["draft", "standard", "fine"] = "standard"
-    material: Literal["pla", "petg", "tpu"] = "pla"
+    quality: str = Field("standard", pattern=profiles.NAME_RE.pattern)
+    material: str = Field("pla", pattern=profiles.NAME_RE.pattern)
     infill: int = Field(15, ge=0, le=100)
     supports: Literal["none", "buildplate", "everywhere"] = "none"
     brim: float = Field(0, ge=0, le=20, description="Brim width in mm, 0 disables")
@@ -39,6 +28,10 @@ class SliceOptions(BaseModel):
     probe_bed: bool = False
     nozzle_temp: int | None = Field(None, ge=150, le=260)
     bed_temp: int | None = Field(None, ge=0, le=100)
+    scale: float = Field(100, ge=10, le=1000, description="Uniform scale in percent")
+    rotate: float = Field(0, ge=-360, le=360, description="Rotation around Z in degrees")
+    copies: int = Field(1, ge=1, le=50)
+    plate: int | None = Field(None, ge=1, description="Plate to print from a multi-plate 3MF")
 
 
 class SlicerError(RuntimeError):
@@ -53,7 +46,13 @@ class SliceResult:
 
 def printer_profile_text(probe_bed: bool) -> str:
     mesh = "G29 ; probe a fresh bed mesh" if probe_bed else "M420 S1 ; load saved bed mesh"
-    return PRINTER_PROFILE.read_text().replace(BED_MESH_MARKER, mesh)
+    return profiles.resolve("printer").read_text().replace(BED_MESH_MARKER, mesh)
+
+
+def check_options(opts: SliceOptions) -> None:
+    """Raise ProfileError if the options name a profile that does not exist."""
+    profiles.resolve("quality", opts.quality)
+    profiles.resolve("material", opts.material)
 
 
 def build_command(slicer: str, model: Path, output: Path, printer_ini: Path, opts: SliceOptions) -> list[str]:
@@ -62,8 +61,8 @@ def build_command(slicer: str, model: Path, output: Path, printer_ini: Path, opt
         "--export-gcode",
         "--loglevel", "2",
         "--load", str(printer_ini),
-        "--load", str(PROFILE_DIR / "quality" / f"{opts.quality}.ini"),
-        "--load", str(PROFILE_DIR / "material" / f"{opts.material}.ini"),
+        "--load", str(profiles.resolve("quality", opts.quality)),
+        "--load", str(profiles.resolve("material", opts.material)),
         "--fill-density", f"{opts.infill}%",
         "--brim-width", str(opts.brim),
     ]
@@ -84,10 +83,43 @@ def build_command(slicer: str, model: Path, output: Path, printer_ini: Path, opt
     return cmd
 
 
+def transform_args(opts: SliceOptions) -> list[str]:
+    args = []
+    if opts.scale != 100:
+        args += ["--scale", f"{opts.scale:g}%"]
+    if opts.rotate:
+        args += ["--rotate", f"{opts.rotate:g}"]
+    return args
+
+
 def placement_args(opts: SliceOptions) -> list[str]:
-    if opts.arrange:
-        return ["--center", f"{BED_CENTER[0]},{BED_CENTER[1]}"]
-    return ["--dont-arrange"]
+    """Copies and bed placement, shared by slicing and the 3D preview."""
+    args = []
+    if opts.copies > 1:
+        args += ["--duplicate", str(opts.copies)]
+    if opts.arrange or opts.copies > 1:
+        args += ["--center", f"{BED_CENTER[0]},{BED_CENTER[1]}"]
+    else:
+        args += ["--dont-arrange"]
+    return args
+
+
+async def prepare_model(slicer: str, model: Path, workdir: Path, opts: SliceOptions, timeout: int) -> Path:
+    """Apply scale and rotation in a separate pass.
+
+    The PrusaSlicer CLI makes copies (--duplicate) before it scales, whatever the
+    argument order, so scaled copies would be spaced for the original size and
+    overlap. Baking the transform into an intermediate 3MF first avoids that.
+    """
+    args = transform_args(opts)
+    if not args:
+        return model
+    out = workdir / "transformed.3mf"
+    code, log = await _run([slicer, "--export-3mf", "--loglevel", "2", *args, "--dont-arrange",
+                            "--output", str(out), str(model)], timeout)
+    if code != 0 or not out.exists():
+        raise _failure(code, log)
+    return out
 
 
 def headless_env() -> dict[str, str]:
@@ -128,8 +160,10 @@ async def export_preview(slicer: str, model: Path, output: Path, opts: SliceOpti
     """Export the model as one binary STL, positioned on the bed exactly as it will be sliced."""
     _check_slicer(slicer)
     output.unlink(missing_ok=True)
-    cmd = [slicer, "--export-stl", "--loglevel", "2", *placement_args(opts), "--output", str(output), str(model)]
-    code, log = await _run(cmd, timeout)
+    with tempfile.TemporaryDirectory(prefix="printbridge-") as tmp:
+        src = await prepare_model(slicer, model, Path(tmp), opts, timeout)
+        cmd = [slicer, "--export-stl", "--loglevel", "2", *placement_args(opts), "--output", str(output), str(src)]
+        code, log = await _run(cmd, timeout)
     if code != 0 or not output.exists():
         raise _failure(code, log)
     return output
@@ -139,9 +173,10 @@ async def slice_model(slicer: str, model: Path, output: Path, opts: SliceOptions
     _check_slicer(slicer)
     output.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="printbridge-") as tmp:
+        src = await prepare_model(slicer, model, Path(tmp), opts, timeout)
         printer_ini = Path(tmp) / "printer.ini"
         printer_ini.write_text(printer_profile_text(opts.probe_bed))
-        code, log = await _run(build_command(slicer, model, output, printer_ini, opts), timeout)
+        code, log = await _run(build_command(slicer, src, output, printer_ini, opts), timeout)
     if code != 0 or not output.exists():
         raise _failure(code, log)
     return SliceResult(gcode_path=output, log=log)

@@ -165,7 +165,7 @@ async def test_box_idle_hides_placeholder_filename():
     info = {**BOX_INFO, "state": 0, "print": "Welcome to Creality"}
     _, host = box(lambda r: httpx.Response(200, json=info))
     st = await host.status()
-    assert st.state == "Operational" and st.file is None and st.progress is None
+    assert st.state == "Operational" and st.file is None and st.elapsed is None
 
 
 async def test_box_upload_via_ftp_then_start(sample_gcode):

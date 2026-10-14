@@ -11,8 +11,9 @@ import asyncio
 import ftplib
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import BaseModel
@@ -43,7 +44,26 @@ class PrinterStatus(BaseModel):
     message: str | None = None
 
 
+class RemoteFile(BaseModel):
+    name: str
+    size: int | None = None
+    modified: float | None = None
+
+
+# Commands are sent as plain G-code where the host allows it.
+def _gcode_for(command: str, nozzle: int = 0, bed: int = 0) -> list[str]:
+    return {
+        "preheat": [f"M104 S{nozzle}", f"M140 S{bed}"],
+        "cooldown": ["M104 S0", "M140 S0"],
+        "home": ["G28"],
+        "fan_on": ["M106 S255"],
+        "fan_off": ["M107"],
+    }[command]
+
+
 class PrintHost(ABC):
+    supports_light = False
+
     def __init__(self, cfg: PrinterConfig, transport: httpx.AsyncBaseTransport | None = None):
         if not cfg.url:
             raise PrinterError("No printer URL configured")
@@ -81,6 +101,20 @@ class PrintHost(ABC):
 
     @abstractmethod
     async def control(self, action: str) -> None: ...
+
+    @abstractmethod
+    async def send_gcode(self, lines: list[str]) -> None: ...
+
+    async def command(self, command: str, nozzle: int = 0, bed: int = 0) -> None:
+        if command in ("light_on", "light_off"):
+            raise PrinterError("This print host cannot switch the printer light")
+        await self.send_gcode(_gcode_for(command, nozzle, bed))
+
+    @abstractmethod
+    async def list_files(self) -> list[RemoteFile]: ...
+
+    @abstractmethod
+    async def delete_file(self, name: str) -> None: ...
 
 
 class OctoPrint(PrintHost):
@@ -122,6 +156,20 @@ class OctoPrint(PrintHost):
         if body is None:
             raise PrinterError(f"Unsupported action: {action}")
         await self._request("POST", "/api/job", json=body)
+
+    async def send_gcode(self, lines: list[str]) -> None:
+        await self._request("POST", "/api/printer/command", json={"commands": lines})
+
+    async def list_files(self) -> list[RemoteFile]:
+        files = (await self._request("GET", "/api/files/local", params={"recursive": "false"})).json().get("files", [])
+        return [
+            RemoteFile(name=f["name"], size=f.get("size"), modified=f.get("date"))
+            for f in files
+            if f.get("type") == "machinecode"
+        ]
+
+    async def delete_file(self, name: str) -> None:
+        await self._request("DELETE", f"/api/files/local/{quote(name)}")
 
 
 class Moonraker(PrintHost):
@@ -179,6 +227,16 @@ class Moonraker(PrintHost):
             raise PrinterError(f"Unsupported action: {action}")
         await self._request("POST", f"/printer/print/{action}")
 
+    async def send_gcode(self, lines: list[str]) -> None:
+        await self._request("POST", "/printer/gcode/script", params={"script": "\n".join(lines)}, timeout=60.0)
+
+    async def list_files(self) -> list[RemoteFile]:
+        files = (await self._request("GET", "/server/files/list", params={"root": "gcodes"})).json().get("result", [])
+        return [RemoteFile(name=f["path"], size=f.get("size"), modified=f.get("modified")) for f in files]
+
+    async def delete_file(self, name: str) -> None:
+        await self._request("DELETE", f"/server/files/gcodes/{quote(name)}")
+
 
 class CrealityBox(PrintHost):
     """Creality Wi-Fi Box 2.0 (stock firmware).
@@ -188,6 +246,7 @@ class CrealityBox(PrintHost):
     microSD card for uploads. The box then streams the file to the printer over USB.
     """
 
+    supports_light = True
     HTTP_PORT = 81
     FTP_DIR = "/mmcblk0p1/creality/gztemp"
     PRINT_DIR = "/media/mmcblk0p1/creality/gztemp"
@@ -246,17 +305,15 @@ class CrealityBox(PrintHost):
             nozzle=Temperature(actual=num("nozzleTemp"), target=num("nozzleTemp2")),
             bed=Temperature(actual=num("bedTemp"), target=num("bedTemp2")),
             file=(Path(str(d.get("print", ""))).name or None) if printing else None,
-            progress=num("printProgress") if printing else None,
+            progress=num("printProgress"),
             elapsed=num("printJobTime") if printing else None,
             remaining=num("printLeftTime") if printing else None,
             message="; ".join(messages) or None,
         )
 
     def _ftp_upload(self, gcode: Path, filename: str) -> None:
-        ftp = self._ftp_factory(self.hostname)
+        ftp = self._ftp()  # anonymous login
         try:
-            ftp.login()  # anonymous
-            ftp.cwd(self.FTP_DIR)
             with gcode.open("rb") as fh:
                 ftp.storbinary(f"STOR {filename}", fh, blocksize=64 * 1024)
             try:
@@ -266,10 +323,7 @@ class CrealityBox(PrintHost):
             if size is not None and size != gcode.stat().st_size:
                 raise PrinterError(f"Upload incomplete: box has {size} of {gcode.stat().st_size} bytes")
         finally:
-            try:
-                ftp.quit()
-            except (OSError, ftplib.Error):
-                ftp.close()
+            self._close(ftp)
 
     async def upload(self, gcode: Path, filename: str, start: bool) -> None:
         try:
@@ -284,6 +338,97 @@ class CrealityBox(PrintHost):
         if params is None:
             raise PrinterError(f"Unsupported action: {action}")
         await self._set(**params)
+
+    async def send_gcode(self, lines: list[str]) -> None:
+        for line in lines:
+            await self._set(gcodeCmd=line)
+
+    async def command(self, command: str, nozzle: int = 0, bed: int = 0) -> None:
+        # Use the box's own parameters (as CrealityPrint does) where it has them.
+        if command == "preheat":
+            await self._set(nozzleTemp2=str(nozzle))
+            await self._set(bedTemp2=str(bed))
+        elif command == "cooldown":
+            await self._set(nozzleTemp2="0")
+            await self._set(bedTemp2="0")
+        elif command in ("light_on", "light_off"):
+            await self._set(led="1" if command == "light_on" else "0")
+        elif command in ("fan_on", "fan_off"):
+            await self._set(fan="1" if command == "fan_on" else "0")
+        else:
+            await super().command(command, nozzle, bed)
+
+    def _ftp(self) -> ftplib.FTP:
+        ftp = self._ftp_factory(self.hostname)
+        ftp.login()
+        ftp.cwd(self.FTP_DIR)
+        return ftp
+
+    @staticmethod
+    def _close(ftp: ftplib.FTP) -> None:
+        try:
+            ftp.quit()
+        except (OSError, ftplib.Error):
+            ftp.close()
+
+    def _ftp_list(self) -> list[RemoteFile]:
+        ftp = self._ftp()
+        try:
+            lines: list[str] = []
+            ftp.retrlines("LIST", lines.append)
+        finally:
+            self._close(ftp)
+        return [f for line in lines if (f := _parse_list_line(line))]
+
+    def _ftp_delete(self, name: str) -> None:
+        ftp = self._ftp()
+        try:
+            ftp.delete(name)
+        finally:
+            self._close(ftp)
+
+    async def list_files(self) -> list[RemoteFile]:
+        try:
+            return await asyncio.to_thread(self._ftp_list)
+        except (OSError, ftplib.Error) as e:
+            raise PrinterError(f"Could not list files on the Wi-Fi Box: {e}") from e
+
+    async def delete_file(self, name: str) -> None:
+        if "/" in name or name in (".", ".."):
+            raise PrinterError("Invalid file name")
+        try:
+            await asyncio.to_thread(self._ftp_delete, name)
+        except (OSError, ftplib.Error) as e:
+            raise PrinterError(f"Could not delete {name}: {e}") from e
+
+
+_MONTHS = {m: i for i, m in enumerate(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+
+
+def _parse_list_line(line: str) -> RemoteFile | None:
+    """Parse a Unix-style FTP LIST line: '-rwxrwxrwx 1 0 0 1275644 Apr 18  2024 name'."""
+    parts = line.split(None, 8)
+    if len(parts) < 9 or not parts[0].startswith("-"):
+        return None
+    try:
+        size = int(parts[4])
+    except ValueError:
+        size = None
+    modified = None
+    month, day, year_or_time = parts[5], parts[6], parts[7]
+    try:
+        now = datetime.now()
+        if ":" in year_or_time:
+            hh, mm = year_or_time.split(":")
+            dt = datetime(now.year, _MONTHS[month], int(day), int(hh), int(mm))
+            if dt > now:  # LIST omits the year for the last ~6 months
+                dt = dt.replace(year=now.year - 1)
+        else:
+            dt = datetime(int(year_or_time), _MONTHS[month], int(day))
+        modified = dt.timestamp()
+    except (KeyError, ValueError):
+        pass
+    return RemoteFile(name=parts[8], size=size, modified=modified)
 
 
 def make_host(cfg: PrinterConfig, transport: httpx.AsyncBaseTransport | None = None) -> PrintHost:

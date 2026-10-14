@@ -68,30 +68,59 @@ These only apply until the settings are first saved in the UI.
 
 ## Slicing
 
-The profile in `src/printbridge/profiles/` targets the stock V3 SE: a
-220 × 220 × 250 mm bed, a 0.4 mm nozzle, the direct-drive extruder with 0.8 mm
-retraction, Marlin 2 G-code and the Creality-style purge line. It ships with:
+The built-in profile targets the stock V3 SE: a 220 × 220 × 250 mm bed, a
+0.4 mm nozzle, the direct-drive extruder with 0.8 mm retraction, Marlin 2
+G-code and a Creality-style purge line. The bed heats fully before homing, so
+the probe measures it hot. It ships with:
 
 - **Quality:** Draft (0.28 mm), Standard (0.20 mm), Fine (0.12 mm)
 - **Material:** PLA, PETG, TPU
-- **Progress:** the G-code includes `M73` progress and remaining-time updates, so the Wi-Fi Box, the printer screen and PrintBridge can show how far along a print is.
-- **Per-job options:** infill, supports (none, touching the build plate, or everywhere), brim, nozzle and bed temperature overrides, auto-arrange and centering, and an optional fresh `G29` bed probe. Without the probe it loads the saved mesh with `M420 S1`.
-
-Each job has a **3D view** that shows the model on a 220 × 220 mm bed with
-the same placement PrusaSlicer will use. The view is exported by PrusaSlicer
-itself, so what you see is what gets sliced. Anything outside the build volume
-turns red. three.js is bundled with the app, so the viewer works without
-internet access.
+- **Per-job options:** infill, supports, brim, temperature overrides, **scale**, **rotation**, **copies**, auto-arrange, and an optional fresh `G29` bed probe. Without the probe it loads the saved mesh with `M420 S1`.
+- **Progress:** `M73` progress and remaining-time lines, so the Wi-Fi Box, the printer screen and PrintBridge show how far along a print is.
+- **Presets:** save the current options under a name, for example "PETG functional", and load them with one click.
 
 Settings saved inside a 3MF from another slicer (Bambu Studio, Orca, Cura,
 PrusaSlicer) are ignored. Only the geometry is used, so the G-code always
-matches this printer. Objects placed for a different bed are re-centered on the
-220 mm plate, unless you turn off **Arrange & center**. If you upload `.gcode`,
-slicing is skipped and the file can be sent as is.
+matches this printer. **Multi-plate 3MFs** from Bambu Studio and OrcaSlicer get
+a plate picker on the job. Plate 1 is sliced by default, and choosing another
+plate re-slices that plate only. If you upload `.gcode`, slicing is skipped.
 
-To tune the output, edit the `.ini` files. They use normal PrusaSlicer config
-keys, and you can drop in a new quality or material by adding a file and its
-entry in `slicer.py`.
+### Editing profiles
+
+Click **Profiles** to edit the machine, quality and material profiles in the
+browser, or to add your own, such as an ASA material or a 0.16 mm quality.
+Edits are saved in the data volume under `profiles/`, so they survive image
+updates. **Reset to default** brings back the built-in version. The files use
+PrusaSlicer's config keys, and the first comment line is the name shown in
+menus.
+
+## Previews
+
+Each job's **3D view** has two tabs:
+
+- **Model:** the model on the 220 × 220 mm bed with the same placement
+  PrusaSlicer will use. Anything outside the build volume turns red.
+- **Toolpaths:** the sliced G-code, coloured by feature (perimeters, infill,
+  supports, brim and so on), with a layer slider and a single-layer mode.
+
+three.js is bundled with the app, so the viewer works without internet access.
+
+## Printer controls, storage and notifications
+
+- **Controls:** preheat for any material profile, cool down, home, the printer
+  light (Wi-Fi Box) and a G-code console. Temperature, homing and G-code
+  commands are refused while a print is running.
+- **Busy guard:** **Print** is disabled while the printer is printing or
+  offline, and the server refuses it too. **Upload only** still works.
+- **Print tracking:** a background monitor follows each print, marks the job
+  *printing*, then *printed* or *stopped*, and can notify you through
+  [ntfy](https://ntfy.sh) push notifications and/or a JSON webhook, for example
+  a Home Assistant webhook. Set this up under **Settings → Notifications**.
+- **Printer storage:** list the files on the Wi-Fi Box's microSD card (or on
+  OctoPrint or Moonraker), see which ones PrintBridge uploaded, and delete
+  them. The file that is currently printing is protected.
+- **Job cleanup:** under **Settings → Storage**, finished jobs can be deleted
+  automatically after a number of days. This is off by default.
 
 ## Local development
 
