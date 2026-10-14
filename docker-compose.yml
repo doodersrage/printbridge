@@ -9,8 +9,13 @@ services:
       - "8000:8000"
     volumes:
       - printbridge-data:/data
+      # Watch folder: model files saved here are imported automatically.
+      # Create it first and make it writable for the container user (uid 1000):
+      #   mkdir -p inbox && sudo chown 1000:1000 inbox
+      - ./inbox:/watch
     environment:
       # Optional first-run defaults; can be changed later in the web UI (Settings).
+      PRINTBRIDGE_WATCH_DIR: /watch
       PRINTBRIDGE_PRINTER_KIND: ${PRINTBRIDGE_PRINTER_KIND:-creality_box}
       PRINTBRIDGE_PRINTER_URL: ${PRINTBRIDGE_PRINTER_URL:-}
       PRINTBRIDGE_PRINTER_API_KEY: ${PRINTBRIDGE_PRINTER_API_KEY:-}

@@ -18,7 +18,16 @@ from .jobs import JobStore
 from .monitor import Monitor
 from .mqtt import MqttBridge
 from .routes import auth, jobs, printer, profiles, settings
-from .runtime import backup_loop, log, mqtt_command, prune_loop, spawn, state, supports_light
+from .runtime import (
+    backup_loop,
+    log,
+    mqtt_command,
+    prune_loop,
+    spawn,
+    state,
+    supports_light,
+    watch_loop,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -38,6 +47,8 @@ async def lifespan(_: FastAPI):
     spawn(state.mqtt.run())
     spawn(prune_loop())
     spawn(backup_loop())
+    state.watcher = None
+    spawn(watch_loop())
     log.info("PrintBridge %s started", __version__)
     yield
     for t in state.tasks:

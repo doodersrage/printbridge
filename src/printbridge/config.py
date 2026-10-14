@@ -11,6 +11,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 DATA_DIR = Path(os.environ.get("PRINTBRIDGE_DATA", Path.cwd() / "data")).resolve()
+# Optional folder whose model files are imported automatically (mounted into the container).
+WATCH_DIR = Path(os.environ["PRINTBRIDGE_WATCH_DIR"]).resolve() if os.environ.get("PRINTBRIDGE_WATCH_DIR") else None
 CONFIG_PATH = DATA_DIR / "config.json"
 
 SLICER_CANDIDATES = (
@@ -62,6 +64,8 @@ class Settings(BaseModel):
     slice_timeout: int = 900
     keep_days: int = Field(0, ge=0, le=3650, description="Delete finished jobs older than this; 0 keeps them")
     auto_backup: bool = Field(True, description="Write a configuration backup to the data volume every day")
+    watch_enabled: bool = Field(True, description="Import model files dropped into the watch folder")
+    watch_preset: str = Field("", max_length=60, description="Preset to slice watch-folder files with; empty uses defaults")
     auto_backup_keep: int = Field(7, ge=1, le=90)
     notify: NotifyConfig = NotifyConfig()
     mqtt: MqttConfig = MqttConfig()

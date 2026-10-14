@@ -309,3 +309,7 @@ details.sub[open] summary { margin-bottom: 0.5rem; }
 
 .inline-num { width: 4rem; padding: 0.2rem 0.35rem; display: inline-block; }
 .auto-backups { list-style: none; margin: 0.2rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+
+.find-row { margin: 0 0 0.9rem; flex-wrap: wrap; }
+.find-row input { flex: 1 1 200px; min-width: 0; }
+.find-sites { gap: 0.3rem; }

@@ -11,9 +11,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .calibration import CalibrationSpec
 from .gcode import GcodeStats
 from .slicer import SliceOptions
-from .calibration import CalibrationSpec
 from .threemf import Plate, SourceInfo
 
 JobState = Literal["queued", "slicing", "ready", "failed", "sending", "sent", "printing", "printed", "stopped"]

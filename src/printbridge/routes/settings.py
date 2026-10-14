@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
-import time
 
 from .. import backup, config, notify, profiles
 from ..runtime import _read_upload, state
@@ -106,6 +107,17 @@ async def get_backup() -> Response:
     stamp = time.strftime("%Y%m%d-%H%M")
     return Response(backup.create(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="printbridge-backup-{stamp}.zip"'})
+
+
+@router.get("/api/watch")
+async def watch_status() -> dict:
+    w = state.watcher
+    return {
+        "folder": str(config.WATCH_DIR) if config.WATCH_DIR else None,
+        "enabled": state.settings.watch_enabled,
+        "imported": w.imported if w else 0,
+        "error": w.last_error if w else None,
+    }
 
 
 @router.get("/api/backups")

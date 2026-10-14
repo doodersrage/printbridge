@@ -618,3 +618,92 @@ async def test_auto_backup_api(client):
     assert r.status_code == 200 and r.content[:2] == b"PK"
     assert (await client.get("/api/backups/..%2Fconfig.json")).status_code == 404
     assert (await client.get("/api/backups/config.json")).status_code == 404
+
+
+# ---- watch folder -------------------------------------------------------------
+
+
+def test_watcher_waits_for_downloads_to_settle(tmp_path, monkeypatch):
+    from printbridge import config
+    from printbridge.watch import Watcher
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    got = []
+
+    def importer(name, data):
+        if data == b"bad":
+            raise ValueError("not a model")
+        got.append((name, data))
+        return 1
+
+    w = Watcher(inbox, importer)
+    (inbox / "part.stl").write_bytes(b"solid")
+    (inbox / "big.3mf.crdownload").write_bytes(b"...")  # browser download in progress
+    (inbox / "notes.txt").write_text("hi")
+    (inbox / "broken.stl").write_bytes(b"bad")
+    later = time.time() + 10
+    assert w.scan(now=later) == []  # first sighting: wait for the size to stay the same
+    assert sorted(w.scan(now=later)) == ["broken.stl", "part.stl"]
+    assert got == [("part.stl", b"solid")]
+    assert (inbox / "imported/part.stl").exists() and not (inbox / "part.stl").exists()
+    assert "not a model" in (inbox / "failed/broken.stl.error.txt").read_text()
+    assert (inbox / "big.3mf.crdownload").exists() and (inbox / "notes.txt").exists()
+    assert w.last_error == "broken.stl: not a model" and w.imported == 1
+
+    (inbox / "part.stl").write_bytes(b"solid2")  # same name again: kept apart, not overwritten
+    w.scan(now=later)
+    w.scan(now=later)
+    assert (inbox / "imported/part-1.stl").exists()
+
+
+def test_watcher_read_only_folder_imports_once(tmp_path, monkeypatch):
+    from printbridge import config, watch
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    inbox = tmp_path / "ro"
+    inbox.mkdir()
+    (inbox / "a.stl").write_bytes(b"solid")
+    calls = []
+    monkeypatch.setattr(watch.shutil, "move", lambda *a: (_ for _ in ()).throw(PermissionError("read-only")))
+    w = watch.Watcher(inbox, lambda n, d: calls.append(n) or 1)
+    later = time.time() + 10
+    for _ in range(4):
+        w.scan(now=later)
+    assert calls == ["a.stl"]
+    # ...and remembered across restarts
+    w2 = watch.Watcher(inbox, lambda n, d: calls.append(n) or 1)
+    w2.scan(now=later)
+    w2.scan(now=later)
+    assert calls == ["a.stl"]
+
+
+async def test_watch_import_uses_preset_and_unpacks_zips(client):
+    from printbridge import runtime
+
+    await client.put("/api/presets/Fast", json={"quality": "draft", "infill": 10})
+    s = (await client.get("/api/settings")).json()
+    s["watch_preset"] = "Fast"
+    await client.put("/api/settings", json=s)
+    assert runtime._watch_import("part.3mf", b"PK") == 1
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("x/a.stl", b"solid")
+        z.writestr("x/b.stl", b"solid")
+    assert runtime._watch_import("thing.zip", buf.getvalue()) == 2
+    jobs = (await client.get("/api/jobs")).json()
+    assert {j["name"] for j in jobs} == {"part", "a", "b"}
+    assert all(j["options"]["quality"] == "draft" and j["options"]["infill"] == 10 for j in jobs)
+    with pytest.raises(ValueError):
+        runtime._watch_import("empty.zip", zipfile_bytes({"readme.txt": b"hi"}))
+    status = (await client.get("/api/watch")).json()
+    assert status["folder"] is None  # not configured in tests
+
+
+def zipfile_bytes(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, data in files.items():
+            z.writestr(name, data)
+    return buf.getvalue()

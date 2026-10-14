@@ -98,9 +98,19 @@
           <button type="button" class="ghost small-btn" id="preset-delete" disabled>Delete</button>
         </div>
       </div>
+      <form class="row gap find-row" id="find-form" role="search">
+          <input type="search" id="find-q" placeholder="Find models, e.g. esp32 case" aria-label="Search model sites">
+          <div class="row gap find-sites">
+            <button type="submit" class="ghost small-btn" data-site="printables">Printables</button>
+            <button type="submit" class="ghost small-btn" data-site="makerworld">MakerWorld</button>
+            <button type="submit" class="ghost small-btn" data-site="thingiverse">Thingiverse</button>
+            <button type="submit" class="ghost small-btn" data-site="myminifactory">MyMiniFactory</button>
+            <button type="submit" class="ghost small-btn" data-site="cults">Cults3D</button>
+          </div>
+        </form>
       <form id="upload-form">
         <label class="drop" id="drop">
-          <input type="file" id="file" accept=".3mf,.stl,.obj,.gcode" required>
+          <input type="file" id="file" accept=".3mf,.stl,.obj,.gcode,.zip" required>
           <span class="drop-title" id="drop-title">Drop a 3MF, STL or OBJ here</span>
           <span class="muted small">or click to choose · G-code skips slicing · a zip adds every model inside</span>
         </label>
@@ -217,6 +227,12 @@
         </div>
         <label class="check"><input type="checkbox" name="mqtt_tls"> Use TLS</label>
         <p class="small" id="mqtt-status"></p>
+      </fieldset>
+      <fieldset>
+        <legend>Watch folder</legend>
+        <p class="muted small" id="watch-info"></p>
+        <label class="check"><input type="checkbox" name="watch_enabled"> Import model files that appear in the folder</label>
+        <label>Slice them with<select name="watch_preset" id="watch-preset"></select></label>
       </fieldset>
       <fieldset>
         <legend>Webcam &amp; links</legend>

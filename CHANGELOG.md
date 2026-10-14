@@ -7,7 +7,13 @@ releases may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- **Watch folder**: model files and zips saved into a mounted folder are imported and sliced automatically, using an optional preset. Partial downloads are ignored.
+- **Find models**: one-click searches on Printables, MakerWorld, Thingiverse, MyMiniFactory and Cults3D.
+- Dependabot keeps Python packages, GitHub Actions and the Docker base image up to date.
 - Daily automatic backups in the data volume, keeping the last 7 by default and downloadable from Settings → Backup.
+
+### Fixed
+- The file picker now accepts `.zip` files (previously only drag-and-drop did).
 
 ### Changed
 - Browser tests (`tests/e2e`) run in CI against the Docker image before publishing.

@@ -20,6 +20,22 @@ drop.addEventListener("drop", (e) => {
   if (e.dataTransfer.files.length) { fileInput.files = e.dataTransfer.files; showFile(); }
 });
 
+/* find models: opens the site's own search in a new tab (no site allows apps to download directly) */
+const FIND_SITES = {
+  printables: "https://www.printables.com/search/models?q=",
+  makerworld: "https://makerworld.com/en/search/models?keyword=",
+  thingiverse: "https://www.thingiverse.com/search?type=things&q=",
+  myminifactory: "https://www.myminifactory.com/search/?query=",
+  cults: "https://cults3d.com/en/search?q=",
+};
+$("#find-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("#find-q").value.trim();
+  const site = e.submitter?.dataset.site || "printables";
+  if (!q) { $("#find-q").focus(); return; }
+  window.open(FIND_SITES[site] + encodeURIComponent(q), "_blank", "noopener");
+});
+
 $("#import-btn").addEventListener("click", async () => {
   const input = $("#import-url");
   const url = input.value.trim();

@@ -9,20 +9,34 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-from . import backup, calibration, combine, config, profiles
+from . import backup, calibration, combine, config, importer, presets, profiles
 from .auth import AuthConfig
 from .gcode import parse_stats
 from .jobs import Job, JobStore
 from .monitor import ACTIVE, Monitor
 from .mqtt import MqttBridge
 from .printers import PrinterError, make_host
-from .slicer import SliceOptions, SlicerError, check_options, export_preview, slice_model
-from .threemf import ThreeMFError, extract_plate, inspect, read_plates, remove_stored_scale
+from .slicer import (
+    SliceOptions,
+    SlicerError,
+    check_options,
+    export_preview,
+    slice_model,
+)
+from .threemf import (
+    ThreeMFError,
+    extract_plate,
+    inspect,
+    read_plates,
+    remove_stored_scale,
+)
+from .watch import Watcher
 
 ACCEPTED = {".3mf", ".stl", ".obj", ".gcode", ".zip"}
 MAX_UPLOAD = 256 * 1024 * 1024
 MAX_THUMBNAIL = 1024 * 1024
 PRUNE_INTERVAL = 3600
+WATCH_INTERVAL = 5
 BACKUP_CHECK_INTERVAL = 3600
 
 log = logging.getLogger("printbridge")
@@ -38,6 +52,7 @@ class State:
     slice_lock: asyncio.Lock
     preview_lock: asyncio.Lock
     tasks: set[asyncio.Task]
+    watcher: "Watcher | None"
 
 
 state = State()
@@ -225,3 +240,32 @@ async def backup_loop() -> None:
             except OSError:
                 log.exception("Automatic backup failed")
         await asyncio.sleep(BACKUP_CHECK_INTERVAL)
+
+
+def _watch_import(filename: str, data: bytes) -> int:
+    """Create jobs for a watch-folder file, sliced with the configured preset."""
+    opts = presets.load().get(state.settings.watch_preset) or SliceOptions()
+    if Path(filename).suffix.lower() == ".zip":
+        files = importer.from_zip(data)  # raises ImportError_ (a ValueError) for zips without models
+    else:
+        files = [(filename, data)]
+    for name, blob in files:
+        add_job(name, blob, opts)
+    return len(files)
+
+
+async def watch_loop() -> None:
+    from .watch import Watcher
+
+    if config.WATCH_DIR is None:
+        state.watcher = None
+        return
+    state.watcher = Watcher(config.WATCH_DIR, _watch_import)
+    log.info("Watching %s for model files", config.WATCH_DIR)
+    while True:
+        if state.settings.watch_enabled:
+            try:
+                state.watcher.scan()
+            except Exception:
+                log.exception("Watch folder scan failed")
+        await asyncio.sleep(WATCH_INTERVAL)

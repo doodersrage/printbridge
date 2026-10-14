@@ -52,6 +52,8 @@ $("#open-settings").addEventListener("click", async () => {
   sform.public_url.value = s.public_url || location.origin;
   sform.currency.value = s.currency;
   sform.auto_backup.checked = s.auto_backup;
+  sform.watch_enabled.checked = s.watch_enabled;
+  loadWatch(s.watch_preset);
   sform.auto_backup_keep.value = s.auto_backup_keep;
   loadAutoBackups();
   $("#restore-result").textContent = "";
@@ -99,6 +101,8 @@ async function saveSettings() {
     public_url: sform.public_url.value.trim(),
     currency: sform.currency.value.trim() || "$",
     auto_backup: sform.auto_backup.checked,
+    watch_enabled: sform.watch_enabled.checked,
+    watch_preset: sform.watch_preset.value,
     auto_backup_keep: Number(sform.auto_backup_keep.value) || 7,
   };
   await api("/api/settings", { method: "PUT", json: body });
@@ -132,6 +136,23 @@ $("#notify-test").addEventListener("click", async () => {
     out.textContent = e.message;
   }
 });
+
+async function loadWatch(current) {
+  const sel = $("#watch-preset");
+  const names = Object.keys(presetsCache ?? {});
+  sel.replaceChildren(new Option("Default settings", ""), ...names.map((n) => new Option(n, n)));
+  sel.value = names.includes(current) ? current : "";
+  const info = $("#watch-info");
+  try {
+    const w = await api("/api/watch");
+    const on = !!w.folder;
+    sform.watch_enabled.disabled = sel.disabled = !on;
+    info.textContent = on
+      ? `Watching ${w.folder} inside the container. Files are moved to imported/ (or failed/) afterwards.`
+        + (w.imported ? ` ${w.imported} imported since start.` : "") + (w.error ? ` Last problem: ${w.error}` : "")
+      : "Not set up. Mount a folder into the container and set PRINTBRIDGE_WATCH_DIR (see the README), then save your browser downloads there.";
+  } catch { info.textContent = ""; }
+}
 
 async function loadAutoBackups() {
   const ul = $("#auto-backups");

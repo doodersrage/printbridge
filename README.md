@@ -196,12 +196,36 @@ less.
 
 - Drag in **3MF, STL, OBJ or G-code**, or a **zip**. A zip creates one job per
   model inside, which suits Thingiverse's "Download all files".
+- **Watch folder**: save a model into the watched folder and it is imported and
+  sliced automatically (see below).
+- **Find models**: type a search into the New print card and click a site
+  (Printables, MakerWorld, Thingiverse, MyMiniFactory, Cults3D) to open its
+  search. These sites don't allow apps to download for you, so pair this with
+  the watch folder.
 - **Paste a direct download link** to import a model. Sites such as
   Thingiverse, Printables and MakerWorld block downloads from apps, so for
   those, download in your browser and drop the file in.
 - **Combine**: tick two or more jobs and click **Combine selected** to lay them
   out on one bed. Each keeps its own scale, rotation and copies.
 - Each job gets a **thumbnail**, rendered once in your browser.
+
+### Watch folder setup
+
+The compose file mounts `./inbox` next to it as the watched folder. Create it
+before starting the container, so the container's user (uid 1000) can move
+imported files into `imported/`:
+
+```bash
+mkdir -p inbox && sudo chown 1000:1000 inbox
+docker compose up -d
+```
+
+Then make that folder your browser's download location. You can share it on
+your network with Samba, sync it with Syncthing, or use the browser on the
+server itself. Files are imported once they finish downloading; partial
+`.crdownload` and `.part` files are ignored. Afterwards they move to
+`imported/`, or to `failed/` with a note explaining why. Under
+**Settings → Watch folder** you can pause it or choose a preset to slice with.
 
 ## Install as an app
 
